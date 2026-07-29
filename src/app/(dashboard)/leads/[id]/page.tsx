@@ -228,6 +228,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         <SequenceTimeline
           sequence={sequence}
           steps={steps}
+          lead={lead}
           onMarkSent={markStepAsSent}
           onSkipStep={skipStep}
           loading={seqLoading}

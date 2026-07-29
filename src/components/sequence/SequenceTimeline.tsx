@@ -2,16 +2,19 @@
 
 import React from 'react';
 import { Sequence, SequenceStep } from '@/types/sequence';
+import { Lead } from '@/types/lead';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDate } from '@/utils/date';
-import { CheckCircle2, Clock, SkipForward, Mail, Calendar } from 'lucide-react';
+import { openGmailCompose, openLinkedinProfile } from '@/utils/outreach';
+import { CheckCircle2, Clock, SkipForward, Mail, Calendar, ExternalLink } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 import { STEP_STATUS_COLORS } from '@/constants/status';
 
 interface SequenceTimelineProps {
   sequence: Sequence | null;
   steps: SequenceStep[];
+  lead?: Lead | null;
   onMarkSent: (stepId: string) => Promise<boolean>;
   onSkipStep: (stepId: string) => Promise<boolean>;
   loading?: boolean;
@@ -20,6 +23,7 @@ interface SequenceTimelineProps {
 export function SequenceTimeline({
   sequence,
   steps,
+  lead,
   onMarkSent,
   onSkipStep,
   loading = false,
@@ -43,6 +47,18 @@ export function SequenceTimeline({
   }
 
   const isLinkedin = sequence.type === 'linkedin';
+
+  const handleActionAndMarkSent = async (step: SequenceStep) => {
+    let opened = false;
+    if (isLinkedin) {
+      opened = openLinkedinProfile(lead?.linkedin || '', step.message);
+    } else {
+      opened = openGmailCompose(lead?.email || '', step.subject, step.message);
+    }
+    if (opened) {
+      await onMarkSent(step.id);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -136,16 +152,40 @@ export function SequenceTimeline({
                     >
                       Skip Step
                     </Button>
+
                     <Button
                       type="button"
-                      variant="primary"
+                      variant="ghost"
                       size="sm"
                       onClick={() => onMarkSent(step.id)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs flex items-center gap-1.5"
+                      className="text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900"
                     >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      Mark Sent
+                      Mark Sent Only
                     </Button>
+
+                    {isLinkedin ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => handleActionAndMarkSent(step)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white text-xs flex items-center gap-1.5"
+                      >
+                        <Linkedin className="h-3.5 w-3.5" />
+                        Open LinkedIn Profile
+                        <ExternalLink className="h-3 w-3 ml-0.5 opacity-80" />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => handleActionAndMarkSent(step)}
+                        className="bg-purple-600 hover:bg-purple-700 text-white text-xs flex items-center gap-1.5"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        Open Gmail Compose
+                        <ExternalLink className="h-3 w-3 ml-0.5 opacity-80" />
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -156,3 +196,4 @@ export function SequenceTimeline({
     </div>
   );
 }
+

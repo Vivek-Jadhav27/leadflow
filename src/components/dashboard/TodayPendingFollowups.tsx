@@ -7,8 +7,9 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDate } from '@/utils/date';
+import { openGmailCompose, openLinkedinProfile } from '@/utils/outreach';
 import { ROUTES } from '@/constants/routes';
-import { Mail, CheckCircle2, Calendar, ArrowRight, UserCheck } from 'lucide-react';
+import { Mail, CheckCircle2, Calendar, ArrowRight, UserCheck, ExternalLink } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
 interface TodayPendingFollowupsProps {
@@ -36,6 +37,18 @@ export function TodayPendingFollowups({
       </Card>
     );
   }
+
+  const handleOutreachAction = async (stepId: string, isLinkedin: boolean, email: string, linkedinUrl: string, subject?: string, message?: string) => {
+    let opened = false;
+    if (isLinkedin) {
+      opened = openLinkedinProfile(linkedinUrl, message);
+    } else {
+      opened = openGmailCompose(email, subject, message);
+    }
+    if (opened) {
+      await onMarkSent(stepId);
+    }
+  };
 
   return (
     <Card className="p-0 border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -138,15 +151,41 @@ export function TodayPendingFollowups({
                       <ArrowRight className="h-3 w-3" />
                     </Link>
 
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => onMarkSent(step.id)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs flex items-center gap-1.5 shadow-xs"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      Mark Sent
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onMarkSent(step.id)}
+                        className="text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900"
+                      >
+                        Mark Sent Only
+                      </Button>
+
+                      {isLinkedin ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleOutreachAction(step.id, true, lead.email, lead.linkedin || '', step.subject, step.message)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs flex items-center gap-1.5 shadow-xs"
+                        >
+                          <Linkedin className="h-3.5 w-3.5" />
+                          Open LinkedIn
+                          <ExternalLink className="h-3 w-3 opacity-80" />
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleOutreachAction(step.id, false, lead.email, lead.linkedin || '', step.subject, step.message)}
+                          className="bg-purple-600 hover:bg-purple-700 text-white text-xs flex items-center gap-1.5 shadow-xs"
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Open Gmail Compose
+                          <ExternalLink className="h-3 w-3 opacity-80" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -157,3 +196,4 @@ export function TodayPendingFollowups({
     </Card>
   );
 }
+
