@@ -99,7 +99,7 @@ export function LeadForm({
   };
 
   return (
-    <Card className="max-w-4xl mx-auto border-slate-200/80 dark:border-slate-800 shadow-sm">
+    <Card className="max-w-6xl mx-auto border-slate-200/80 dark:border-slate-800 shadow-sm">
       <CardHeader className="space-y-1">
         <div className="flex items-center gap-2 mb-2">
           <Link href={ROUTES.LEADS}>

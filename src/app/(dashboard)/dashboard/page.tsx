@@ -36,23 +36,6 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 py-4">
-      {/* Top Bar Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-            SDR Dashboard
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Track your lead pipeline and execute manual follow-up sequences.
-          </p>
-        </div>
-        <Link href={ROUTES.NEW_LEAD}>
-          <Button size="sm" className="bg-slate-900 hover:bg-slate-800 text-white gap-1.5 shadow-xs">
-            <Plus className="h-4 w-4" />
-            Add New Lead & Sequence
-          </Button>
-        </Link>
-      </div>
 
       {/* Metrics Cards */}
       <DashboardCards stats={stats} loading={leadsLoading} />
@@ -65,7 +48,7 @@ export default function DashboardPage() {
       />
 
       {/* Recent Leads Table */}
-      <section className="space-y-4 pt-2">
+      {/* <section className="space-y-4 pt-2">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -88,7 +71,7 @@ export default function DashboardPage() {
           isLoading={leadsLoading}
           onDeleteLead={deleteLead}
         />
-      </section>
+      </section> */}
     </div>
   );
 }

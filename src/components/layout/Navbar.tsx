@@ -39,12 +39,12 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* <Link href={ROUTES.NEW_LEAD}>
+        <Link href={ROUTES.NEW_LEAD}>
           <Button size="sm" className="gap-1.5">
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Add Lead</span>
           </Button>
-        </Link> */}
+        </Link>
       </div>
     </header>
   );

@@ -24,13 +24,13 @@ export function TodayPendingFollowups({
 }: TodayPendingFollowupsProps) {
   if (loading) {
     return (
-      <Card className="border border-slate-200 dark:border-slate-800">
-        <CardHeader className="py-4 px-6 border-b border-slate-100 dark:border-slate-800">
+      <Card className="p-0 border border-slate-200 dark:border-slate-800">
+        <CardHeader className="py-3 px-4 sm:px-5 border-b border-slate-100 dark:border-slate-800">
           <CardTitle className="text-base font-semibold">Today&apos;s Pending Follow-ups</CardTitle>
         </CardHeader>
-        <CardContent className="p-6 space-y-4">
+        <CardContent className="p-4 sm:p-5 space-y-4">
           {[1, 2].map((i) => (
-            <div key={i} className="h-24 bg-slate-100 dark:bg-slate-800 rounded-xl animate-pulse" />
+            <div key={i} className="h-20 bg-slate-100 dark:bg-slate-800 rounded-xl animate-pulse" />
           ))}
         </CardContent>
       </Card>
@@ -38,8 +38,8 @@ export function TodayPendingFollowups({
   }
 
   return (
-    <Card className="border border-slate-200 dark:border-slate-800 shadow-sm">
-      <CardHeader className="py-4 px-6 border-b border-slate-100 dark:border-slate-800 flex flex-row items-center justify-between">
+    <Card className="p-0 border border-slate-200 dark:border-slate-800 shadow-sm">
+      <CardHeader className="py-3 px-4 sm:px-5 border-b border-slate-100 dark:border-slate-800 flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-emerald-500" />
@@ -51,11 +51,11 @@ export function TodayPendingFollowups({
         </div>
       </CardHeader>
 
-      <CardContent className="p-6">
+      <CardContent className="p-4 sm:p-5">
         {pendingList.length === 0 ? (
-          <div className="py-12 text-center space-y-3">
-            <div className="mx-auto w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400 flex items-center justify-center">
-              <CheckCircle2 className="h-6 w-6" />
+          <div className="py-6 text-center space-y-2.5">
+            <div className="mx-auto w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400 flex items-center justify-center">
+              <CheckCircle2 className="h-5 w-5" />
             </div>
             <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               All caught up for today!

@@ -44,28 +44,28 @@ export function DashboardCards({ stats, loading = false }: DashboardCardsProps) 
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
       {cards.map((card, index) => {
         const Icon = card.icon;
         return (
-          <Card key={index} className="border border-slate-200 dark:border-slate-800 shadow-sm">
-            <CardContent className="p-5 flex items-center justify-between">
-              <div>
+          <Card key={index} className="p-4 border border-slate-200 dark:border-slate-800 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   {card.title}
                 </p>
                 {loading ? (
-                  <div className="h-7 w-12 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1" />
+                  <div className="h-7 w-12 bg-slate-200 dark:bg-slate-800 rounded animate-pulse" />
                 ) : (
-                  <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight mt-1">
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
                     {card.value}
                   </h3>
                 )}
               </div>
-              <div className={`p-3 rounded-xl ${card.bgColor} ${card.color}`}>
+              <div className={`p-2.5 rounded-xl ${card.bgColor} ${card.color}`}>
                 <Icon className="h-5 w-5" />
               </div>
-            </CardContent>
+            </div>
           </Card>
         );
       })}

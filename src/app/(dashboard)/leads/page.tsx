@@ -64,12 +64,12 @@ export default function LeadsPage() {
             </button>
           </div>
 
-          {/* <Link href={ROUTES.NEW_LEAD}>
+          <Link href={ROUTES.NEW_LEAD}>
             <Button className="gap-2">
               <Plus className="h-4 w-4" />
               Add Lead
             </Button>
-          </Link> */}
+          </Link>
         </div>
       </div>
 
