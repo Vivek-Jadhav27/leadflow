@@ -1,8 +1,8 @@
-import { Lead, LeadFilterOptions, LeadDashboardStats } from '@/types/lead';
+import { Lead, LeadFilterOptions, DashboardStats } from '@/types/lead';
 
 export interface LeadState {
   leads: Lead[];
-  stats: LeadDashboardStats;
+  stats: DashboardStats;
   filters: LeadFilterOptions;
   loading: boolean;
   error: string | null;
@@ -10,18 +10,16 @@ export interface LeadState {
 
 export const initialLeadFilters: LeadFilterOptions = {
   searchQuery: '',
-  status: 'All',
-  priority: 'All',
-  source: 'All',
+  sequenceType: 'All',
   sortBy: 'createdAt',
   sortOrder: 'desc',
 };
 
-export const initialLeadStats: LeadDashboardStats = {
+export const initialLeadStats: DashboardStats = {
   totalLeads: 0,
-  newLeads: 0,
-  interestedLeads: 0,
-  closedLeads: 0,
+  linkedinSequences: 0,
+  emailSequences: 0,
+  todayPendingFollowups: 0,
 };
 
 export const initialLeadState: LeadState = {
@@ -31,3 +29,4 @@ export const initialLeadState: LeadState = {
   loading: true,
   error: null,
 };
+
