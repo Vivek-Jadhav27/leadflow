@@ -11,11 +11,14 @@ import { Lead, CreateLeadInput, SequenceType } from '@/types/lead';
 import { CreateSequenceStepInput } from '@/types/sequence';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { SequenceTypeSelector } from '@/components/sequence/SequenceTypeSelector';
 import { FollowUpCardGenerator } from '@/components/sequence/FollowUpCardGenerator';
 import { ROUTES } from '@/constants/routes';
+import { DESIGNATION_OPTIONS } from '@/constants/designations';
+import { getDefaultSequenceSteps } from '@/utils/leadParser';
 
 interface LeadFormProps {
   initialData?: Lead;
@@ -31,7 +34,7 @@ export function LeadForm({
   initialSteps = [],
   onSubmit,
   title = 'Add New Lead',
-  description = 'Fill lead details, choose a sequence type, and generate follow-up steps.',
+  description = 'Select outreach sequence, enter lead details, and generate follow-up steps.',
   submitLabel = 'Save Lead & Sequence',
 }: LeadFormProps) {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -51,9 +54,9 @@ export function LeadForm({
       ? {
           firstName: initialData.firstName,
           lastName: initialData.lastName || '',
-          company: initialData.company,
-          designation: initialData.designation || '',
-          email: initialData.email,
+          company: initialData.company || '',
+          designation: initialData.designation || DESIGNATION_OPTIONS[0],
+          email: initialData.email || '',
           phone: initialData.phone || '',
           linkedin: initialData.linkedin || '',
           notes: initialData.notes || '',
@@ -63,7 +66,7 @@ export function LeadForm({
           firstName: '',
           lastName: '',
           company: '',
-          designation: '',
+          designation: DESIGNATION_OPTIONS[0],
           email: '',
           phone: '',
           linkedin: '',
@@ -78,25 +81,35 @@ export function LeadForm({
     setGeneratedSteps([]);
   };
 
-  const handleNextStep1 = async () => {
-    const isValid = await trigger(['firstName', 'company', 'email']);
-    if (isValid) {
-      setCurrentStep(2);
-    }
+  const handleNextStep1 = () => {
+    setCurrentStep(2);
   };
 
-  const handleNextStep2 = () => {
-    setCurrentStep(3);
+  const handleNextStep2 = async () => {
+    const fieldsToValidate: (keyof LeadFormData)[] = ['firstName'];
+    if (sequenceType === 'email') {
+      fieldsToValidate.push('email');
+    }
+    const isValid = await trigger(fieldsToValidate);
+    if (isValid) {
+      setCurrentStep(3);
+    }
   };
 
   const handleFinalSubmit = async (data: LeadFormData) => {
     setIsSubmitting(true);
     try {
-      await onSubmit(data as CreateLeadInput, generatedSteps);
+      const stepsToSave = generatedSteps.length > 0 ? generatedSteps : getDefaultSequenceSteps(sequenceType);
+      await onSubmit({ ...data, sequenceType } as CreateLeadInput, stepsToSave);
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const designationSelectOptions = DESIGNATION_OPTIONS.map((title) => ({
+    label: title,
+    value: title,
+  }));
 
   return (
     <Card className="max-w-6xl mx-auto border-slate-200/80 dark:border-slate-800 shadow-sm">
@@ -117,15 +130,33 @@ export function LeadForm({
           </div>
 
           <div className="flex items-center space-x-2 text-xs font-medium">
-            <span className={`px-2.5 py-1 rounded-full ${currentStep === 1 ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
-              1. Lead Info
+            <span
+              className={`px-2.5 py-1 rounded-full ${
+                currentStep === 1
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+              }`}
+            >
+              1. Sequence Type
             </span>
             <span className="text-slate-300">/</span>
-            <span className={`px-2.5 py-1 rounded-full ${currentStep === 2 ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
-              2. Sequence Type
+            <span
+              className={`px-2.5 py-1 rounded-full ${
+                currentStep === 2
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+              }`}
+            >
+              2. Lead Details
             </span>
             <span className="text-slate-300">/</span>
-            <span className={`px-2.5 py-1 rounded-full ${currentStep === 3 ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
+            <span
+              className={`px-2.5 py-1 rounded-full ${
+                currentStep === 3
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+              }`}
+            >
               3. Follow-up Steps
             </span>
           </div>
@@ -134,12 +165,36 @@ export function LeadForm({
 
       <CardContent className="pt-2">
         <form onSubmit={handleSubmit(handleFinalSubmit)} className="space-y-6">
+          {/* STEP 1: Select Sequence Type */}
           {currentStep === 1 && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              <SequenceTypeSelector
+                selectedType={sequenceType}
+                onChange={handleSequenceTypeChange}
+              />
+
+              <div className="flex items-center justify-end pt-6 border-t border-slate-100 dark:border-slate-800">
+                <Button
+                  type="button"
+                  onClick={handleNextStep1}
+                  className="bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-2"
+                >
+                  Continue to Lead Details
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: Lead Details Form */}
+          {currentStep === 2 && (
             <div className="space-y-6 animate-in fade-in duration-200">
               <div className="space-y-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Lead Profile & Position
+                  Lead Profile & Information
                 </h4>
+                
+                {/* 2 Columns x 2 Rows Form Grid */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
@@ -151,22 +206,10 @@ export function LeadForm({
                       {...register('firstName')}
                     />
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                      Last Name
-                    </label>
-                    <Input
-                      placeholder="Doe"
-                      error={errors.lastName?.message}
-                      {...register('lastName')}
-                    />
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                      Company <span className="text-red-500">*</span>
+                      Company Name
                     </label>
                     <Input
                       placeholder="Acme Corp"
@@ -174,89 +217,42 @@ export function LeadForm({
                       {...register('company')}
                     />
                   </div>
+
                   <div>
-                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                      Designation / Title
-                    </label>
-                    <Input
-                      placeholder="VP of Growth"
+                    <Select
+                      label="Designation / Role"
+                      options={designationSelectOptions}
                       error={errors.designation?.message}
                       {...register('designation')}
                     />
                   </div>
+
+                  {sequenceType === 'email' ? (
+                    <div>
+                      <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                        Email Address <span className="text-red-500">*</span>
+                      </label>
+                      <Input
+                        type="email"
+                        placeholder="john@acme.com"
+                        error={errors.email?.message}
+                        {...register('email')}
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                        LinkedIn Profile URL
+                      </label>
+                      <Input
+                        placeholder="https://linkedin.com/in/johndoe"
+                        error={errors.linkedin?.message}
+                        {...register('linkedin')}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <div className="space-y-4 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Contact Information
-                </h4>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                      Email Address <span className="text-red-500">*</span>
-                    </label>
-                    <Input
-                      type="email"
-                      placeholder="john@acme.com"
-                      error={errors.email?.message}
-                      {...register('email')}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                      Phone Number
-                    </label>
-                    <Input
-                      placeholder="+1 (555) 000-0000"
-                      error={errors.phone?.message}
-                      {...register('phone')}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                    LinkedIn Profile URL
-                  </label>
-                  <Input
-                    placeholder="https://linkedin.com/in/johndoe"
-                    error={errors.linkedin?.message}
-                    {...register('linkedin')}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300 block">
-                  SDR Notes & Context
-                </label>
-                <Textarea
-                  rows={3}
-                  placeholder="Key background info, target pain points, or notes..."
-                  {...register('notes')}
-                />
-              </div>
-
-              <div className="flex items-center justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
-                <Button
-                  type="button"
-                  onClick={handleNextStep1}
-                  className="bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-2"
-                >
-                  Continue to Sequence Type
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {currentStep === 2 && (
-            <div className="space-y-6 animate-in fade-in duration-200">
-              <SequenceTypeSelector
-                selectedType={sequenceType}
-                onChange={handleSequenceTypeChange}
-              />
 
               <div className="flex items-center justify-between pt-6 border-t border-slate-100 dark:border-slate-800">
                 <Button
@@ -266,7 +262,7 @@ export function LeadForm({
                   className="flex items-center gap-2"
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  Back to Lead Info
+                  Back to Sequence Type
                 </Button>
 
                 <Button
@@ -274,13 +270,14 @@ export function LeadForm({
                   onClick={handleNextStep2}
                   className="bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-2"
                 >
-                  Generate Follow-up Steps
+                  Continue to Sequence Steps
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
             </div>
           )}
 
+          {/* STEP 3: Sequence Count & Steps */}
           {currentStep === 3 && (
             <div className="space-y-6 animate-in fade-in duration-200">
               <FollowUpCardGenerator
@@ -298,7 +295,7 @@ export function LeadForm({
                   className="flex items-center gap-2"
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  Back to Sequence Type
+                  Back to Lead Details
                 </Button>
 
                 <Button

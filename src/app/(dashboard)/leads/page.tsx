@@ -2,12 +2,13 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Plus, LayoutGrid, List } from 'lucide-react';
+import { Plus, LayoutGrid, List, Zap } from 'lucide-react';
 
 import { useLeads } from '@/hooks/useLeads';
 import { LeadFilters } from '@/components/leads/LeadFilters';
 import { LeadTable } from '@/components/leads/LeadTable';
 import { LeadCard } from '@/components/leads/LeadCard';
+import { QuickAddLeadModal } from '@/components/leads/QuickAddLeadModal';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/common/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -21,9 +22,11 @@ export default function LeadsPage() {
     updateFilters,
     resetFilters,
     deleteLead,
+    createLeadWithSequence,
   } = useLeads();
 
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -64,14 +67,28 @@ export default function LeadsPage() {
             </button>
           </div>
 
+          {/* <Button
+            onClick={() => setIsQuickAddOpen(true)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+          >
+            <Zap className="h-4 w-4" />
+            ⚡ Quick Add
+          </Button> */}
+
           <Link href={ROUTES.NEW_LEAD}>
-            <Button className="gap-2">
+            <Button variant="outline" className="gap-2">
               <Plus className="h-4 w-4" />
-              Add Lead
+              Full Setup Form
             </Button>
           </Link>
         </div>
       </div>
+
+      <QuickAddLeadModal
+        isOpen={isQuickAddOpen}
+        onClose={() => setIsQuickAddOpen(false)}
+        onSave={createLeadWithSequence}
+      />
 
       {/* Search & Filter Controls */}
       <LeadFilters

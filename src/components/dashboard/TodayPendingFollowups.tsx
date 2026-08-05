@@ -162,7 +162,7 @@ export function TodayPendingFollowups({
                         Mark Sent Only
                       </Button>
 
-                      {isLinkedin ? (
+                      {/* {isLinkedin ? (
                         <Button
                           type="button"
                           size="sm"
@@ -184,7 +184,7 @@ export function TodayPendingFollowups({
                           Open Gmail Compose
                           <ExternalLink className="h-3 w-3 opacity-80" />
                         </Button>
-                      )}
+                      )} */}
                     </div>
                   </div>
                 </div>

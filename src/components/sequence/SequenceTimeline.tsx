@@ -48,13 +48,15 @@ export function SequenceTimeline({
 
   const isLinkedin = sequence.type === 'linkedin';
 
-  const handleActionAndMarkSent = async (step: SequenceStep) => {
-    let opened = false;
-    if (isLinkedin) {
-      opened = openLinkedinProfile(lead?.linkedin || '', step.message);
-    } else {
-      opened = openGmailCompose(lead?.email || '', step.subject, step.message);
+  const handleOpenLinkedin = async (step: SequenceStep) => {
+    const opened = openLinkedinProfile(lead?.linkedin || '', step.message);
+    if (opened) {
+      await onMarkSent(step.id);
     }
+  };
+
+  const handleOpenGmail = async (step: SequenceStep) => {
+    const opened = openGmailCompose(lead?.email || '', step.subject, step.message);
     if (opened) {
       await onMarkSent(step.id);
     }
@@ -142,7 +144,7 @@ export function SequenceTimeline({
                 </div>
 
                 {isPending && (
-                  <div className="flex items-center justify-end space-x-2 pt-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
                     <Button
                       type="button"
                       variant="ghost"
@@ -163,11 +165,11 @@ export function SequenceTimeline({
                       Mark Sent Only
                     </Button>
 
-                    {isLinkedin ? (
+                    {/* {isLinkedin ? (
                       <Button
                         type="button"
                         size="sm"
-                        onClick={() => handleActionAndMarkSent(step)}
+                        onClick={() => handleOpenLinkedin(step)}
                         className="bg-blue-600 hover:bg-blue-700 text-white text-xs flex items-center gap-1.5"
                       >
                         <Linkedin className="h-3.5 w-3.5" />
@@ -178,14 +180,14 @@ export function SequenceTimeline({
                       <Button
                         type="button"
                         size="sm"
-                        onClick={() => handleActionAndMarkSent(step)}
+                        onClick={() => handleOpenGmail(step)}
                         className="bg-purple-600 hover:bg-purple-700 text-white text-xs flex items-center gap-1.5"
                       >
                         <Mail className="h-3.5 w-3.5" />
                         Open Gmail Compose
                         <ExternalLink className="h-3 w-3 ml-0.5 opacity-80" />
                       </Button>
-                    )}
+                    )} */}
                   </div>
                 )}
               </div>

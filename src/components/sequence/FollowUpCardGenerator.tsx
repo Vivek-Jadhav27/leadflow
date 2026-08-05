@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SequenceType } from '@/types/lead';
 import { CreateSequenceStepInput } from '@/types/sequence';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,12 @@ export function FollowUpCardGenerator({
   onStepsChange,
 }: FollowUpCardGeneratorProps) {
   const [countInput, setCountInput] = useState<number>(3);
+
+  useEffect(() => {
+    if (steps.length === 0) {
+      handleGenerate();
+    }
+  }, []);
 
   const handleGenerate = () => {
     const num = Math.min(Math.max(countInput, 1), 10);
