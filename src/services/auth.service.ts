@@ -16,6 +16,8 @@ export class AuthService {
       email: user.email,
       displayName: user.displayName || user.email?.split('@')[0] || 'User',
       photoURL: user.photoURL,
+      role: 'admin',
+      title: 'Workspace Owner',
     };
   }
 
@@ -54,6 +56,7 @@ export class AuthService {
         uid: firebaseUser.uid,
         email: email,
         fullName: fullName,
+        role: 'sdr',
         createdAt: new Date().toISOString(),
       };
       await this.repository.createUserProfileDocument(userProfile);

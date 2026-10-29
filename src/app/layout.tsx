@@ -7,8 +7,8 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'LeadFlow - Production Lead Management CRM SaaS',
-  description: 'Streamlined SaaS solution for tracking, prioritizing, and closing sales leads.',
+  title: 'LeadFlow - Outbound Lead Management CRM',
+  description: 'LinkedIn outreach cadence CRM inspired by HubSpot.',
 };
 
 export default function RootLayout({
@@ -17,10 +17,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full" suppressHydrationWarning>
+    <html lang="en" className="h-full light" suppressHydrationWarning>
       <body
         suppressHydrationWarning
-        className={`${inter.className} min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100`}
+        className={`${inter.className} min-h-screen bg-[#f5f8fa] text-[#33475b] antialiased`}
       >
         <AuthProvider>
           {children}

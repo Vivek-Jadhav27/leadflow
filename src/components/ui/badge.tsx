@@ -33,10 +33,10 @@ export const Badge: React.FC<BadgeProps> = ({
 
   const variantClasses =
     variant === 'outline'
-      ? 'border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-300'
+      ? 'border-[#cbd6e2] text-[#33475b] bg-white'
       : variant === 'secondary'
-      ? 'border-transparent bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
-      : 'border-transparent bg-slate-900 text-slate-50 dark:bg-slate-50 dark:text-slate-900';
+      ? 'border-transparent bg-[#eaf0f6] text-[#33475b]'
+      : 'border-transparent bg-[#2d3e50] text-white';
 
   return (
     <span className={twMerge(clsx(baseClasses, variantClasses, className))} {...props}>
