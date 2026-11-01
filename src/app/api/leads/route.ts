@@ -4,11 +4,12 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
+import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
 
 // CORS headers to permit Chrome Extension requests from any origin or chrome-extension://
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-workspace-id',
 };
 
@@ -52,39 +53,74 @@ export async function OPTIONS() {
   });
 }
 
-export async function GET() {
-  const leads = getStoredLeads();
-  return NextResponse.json(
-    {
-      success: true,
-      count: leads.length,
-      leads,
-    },
-    {
-      status: 200,
-      headers: corsHeaders,
-    }
-  );
-}
+export async function GET(req: NextRequest) {
+  try {
+    const isAdminReady =
+      typeof isFirebaseAdminConfigured === 'function'
+        ? isFirebaseAdminConfigured()
+        : isFirebaseAdminConfigured;
 
-import { adminAuth, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
+    let firestoreLeads: any[] = [];
+    const workspaceId =
+      req.headers.get('x-workspace-id') ||
+      req.nextUrl.searchParams.get('workspaceId');
+
+    if (isAdminReady && adminDb) {
+      try {
+        let q: any = adminDb.collection('leads');
+        if (workspaceId) {
+          q = q.where('workspaceId', '==', workspaceId);
+        }
+        const snap = await q.get();
+        if (!snap.empty) {
+          firestoreLeads = snap.docs.map((d: any) => ({
+            id: d.id,
+            ...d.data(),
+          }));
+        }
+      } catch (fsErr) {
+        console.warn('[API /leads GET] Firestore read fallback:', fsErr);
+      }
+    }
+
+    const storedLeads = getStoredLeads();
+    // Merge: prefer Firestore leads, supplement with stored extension leads
+    const leadMap = new Map<string, any>();
+    storedLeads.forEach((l) => leadMap.set(l.id, l));
+    firestoreLeads.forEach((l) => leadMap.set(l.id, l));
+    const merged = Array.from(leadMap.values());
+
+    return NextResponse.json(
+      {
+        success: true,
+        count: merged.length,
+        leads: merged,
+      },
+      {
+        status: 200,
+        headers: corsHeaders,
+      }
+    );
+  } catch (err: any) {
+    console.error('[API /leads GET] Error:', err);
+    return NextResponse.json(
+      { error: err?.message || 'Failed to fetch leads' },
+      { status: 500, headers: corsHeaders }
+    );
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
+    let token = '';
     const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json(
-        { error: 'Unauthorized: You must be logged in to LeadFlow to save leads.' },
-        { status: 401, headers: corsHeaders }
-      );
-    }
-
-    const token = authHeader.substring(7).trim();
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Valid session token required.' },
-        { status: 401, headers: corsHeaders }
-      );
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else {
+      const tokenCookie = req.cookies.get('leadflow_auth_token');
+      if (tokenCookie) {
+        token = tokenCookie.value;
+      }
     }
 
     const body = await req.json();
@@ -98,6 +134,10 @@ export async function POST(req: NextRequest) {
 
     let capturedBy = body.capturedBy || 'extension_user';
     let capturedByUid = body.capturedByUid || null;
+    let resolvedWorkspaceId =
+      req.headers.get('x-workspace-id') ||
+      body.workspaceId ||
+      null;
 
     const isAdminReady =
       typeof isFirebaseAdminConfigured === 'function'
@@ -111,14 +151,20 @@ export async function POST(req: NextRequest) {
           capturedBy = decoded.email;
           capturedByUid = decoded.uid;
         }
+        if (!resolvedWorkspaceId && decoded?.uid) {
+          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
+          if (userDoc.exists) {
+            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId || null;
+          }
+        }
       } catch {
-        // Fallback to body properties if using custom token
+        // Fallback to body properties
       }
     }
 
     const now = new Date().toISOString();
     const newLead = {
-      id: `lead_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: body.id || `lead_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       firstName: body.firstName.trim(),
       lastName: (body.lastName || '').trim(),
       company: body.company.trim(),
@@ -129,24 +175,37 @@ export async function POST(req: NextRequest) {
       channel: 'linkedin' as const,
       sequenceId: body.sequenceId || null,
       sequenceName: body.sequenceName || (body.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
-      currentStepNumber: 1,
-      totalSteps: 4,
-      connectionStatus: body.connectionStatus || 'not_connected',
-      outreachStatus: body.sequenceId ? 'in_sequence' : 'unassigned',
+      currentStepNumber: body.currentStepNumber || (body.sequenceId ? 1 : 0),
+      totalSteps: body.totalSteps || 4,
+      connectionStatus: body.connectionStatus || 'not_started',
+      outreachStatus: body.outreachStatus || (body.sequenceId ? 'in_sequence' : 'unassigned'),
       disposition: body.disposition || 'active',
-      notes: body.notes || 'Added via LeadFlow LinkedIn Chrome Extension',
+      notes: body.notes || 'Added to LeadFlow pipeline',
       capturedBy,
       capturedByUid,
-      workspaceId: req.headers.get('x-workspace-id') || body.workspaceId || null,
-      createdAt: now,
+      assignedToId: body.assignedToId || null,
+      assignedToName: body.assignedToName || null,
+      assignedToEmail: body.assignedToEmail || null,
+      workspaceId: resolvedWorkspaceId || 'default_workspace',
+      nextFollowUpDate: body.nextFollowUpDate || null,
+      nextActionTitle: body.nextActionTitle || null,
+      createdAt: body.createdAt || now,
       updatedAt: now,
     };
 
+    // 1. Save to Firestore 'leads' collection
+    if (isAdminReady && adminDb) {
+      try {
+        await adminDb.collection('leads').doc(newLead.id).set(newLead, { merge: true });
+      } catch (fsErr) {
+        console.warn('[API /leads POST] Firestore lead write warning:', fsErr);
+      }
+    }
+
+    // 2. Also save to local file for offline / development fallback
     const currentLeads = getStoredLeads();
-    
-    // Check if lead with same LinkedIn URL already exists
     const existingIndex = currentLeads.findIndex(
-      (l) => l.linkedinUrl && newLead.linkedinUrl && l.linkedinUrl === newLead.linkedinUrl
+      (l) => l.id === newLead.id || (l.linkedinUrl && newLead.linkedinUrl && l.linkedinUrl === newLead.linkedinUrl)
     );
 
     if (existingIndex >= 0) {
@@ -159,13 +218,12 @@ export async function POST(req: NextRequest) {
     } else {
       currentLeads.unshift(newLead);
     }
-
     saveStoredLeads(currentLeads);
 
     return NextResponse.json(
       {
         success: true,
-        message: 'Lead saved successfully',
+        message: 'Lead saved to Firestore and pipeline store',
         lead: newLead,
       },
       {
@@ -179,6 +237,44 @@ export async function POST(req: NextRequest) {
       { error: error?.message || 'Failed to process lead' },
       { status: 500, headers: corsHeaders }
     );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    if (!body.id) {
+      return NextResponse.json({ error: 'Lead id is required' }, { status: 400, headers: corsHeaders });
+    }
+
+    const isAdminReady =
+      typeof isFirebaseAdminConfigured === 'function'
+        ? isFirebaseAdminConfigured()
+        : isFirebaseAdminConfigured;
+
+    const now = new Date().toISOString();
+    const updates = { ...body, updatedAt: now };
+
+    // Update in Firestore
+    if (isAdminReady && adminDb) {
+      try {
+        await adminDb.collection('leads').doc(body.id).set(updates, { merge: true });
+      } catch (e) {
+        console.warn('[API /leads PATCH] Firestore update error:', e);
+      }
+    }
+
+    // Update local file
+    const currentLeads = getStoredLeads();
+    const idx = currentLeads.findIndex((l) => l.id === body.id);
+    if (idx >= 0) {
+      currentLeads[idx] = { ...currentLeads[idx], ...updates };
+      saveStoredLeads(currentLeads);
+    }
+
+    return NextResponse.json({ success: true, lead: updates }, { status: 200, headers: corsHeaders });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message || 'Update failed' }, { status: 500, headers: corsHeaders });
   }
 }
 
@@ -208,6 +304,20 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
+    const isAdminReady =
+      typeof isFirebaseAdminConfigured === 'function'
+        ? isFirebaseAdminConfigured()
+        : isFirebaseAdminConfigured;
+
+    // Delete from Firestore
+    if (isAdminReady && adminDb && targetId) {
+      try {
+        await adminDb.collection('leads').doc(targetId).delete();
+      } catch (fsErr) {
+        console.warn('[API /leads DELETE] Firestore delete error:', fsErr);
+      }
+    }
+
     const currentLeads = getStoredLeads();
     const filtered = currentLeads.filter((l) => {
       if (targetId && (l.id === targetId || String(l.id) === String(targetId))) return false;
@@ -220,7 +330,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: 'Lead deleted from extension store',
+        message: 'Lead deleted from Firestore and store',
         count: filtered.length,
       },
       { status: 200, headers: corsHeaders }

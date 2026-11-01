@@ -250,6 +250,22 @@ class PrototypeStore {
     return addedCount;
   }
 
+  public syncIncomingSequences(incoming: Sequence[]): number {
+    if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+    let addedCount = 0;
+    for (const item of incoming) {
+      const idx = this.db.sequences.findIndex((s) => s.id === item.id);
+      if (idx === -1) {
+        this.db.sequences.push(item);
+        addedCount++;
+      } else {
+        this.db.sequences[idx] = { ...this.db.sequences[idx], ...item };
+      }
+    }
+    if (addedCount > 0) this.persistAndNotify();
+    return addedCount;
+  }
+
   public updateLead(id: string, updates: Partial<Lead>): Lead | undefined {
     const index = this.db.leads.findIndex((l) => l.id === id);
     if (index === -1) return undefined;

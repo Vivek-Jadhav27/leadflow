@@ -39,20 +39,53 @@ export function useCRM() {
     return unsubscribe;
   }, [refreshAll]);
 
-  // Synchronize incoming leads from Chrome Extension API
+  // Synchronize incoming leads & sequences from Firestore and Clipper API
   useEffect(() => {
     let isMounted = true;
 
-    const syncExtensionLeads = async () => {
+    // Initial backfill: sync any existing local leads & sequences to Firestore
+    const initialCloudSync = async () => {
       try {
-        const res = await fetch('/api/leads');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.leads && Array.isArray(data.leads) && isMounted) {
-          const added = prototypeStore.syncIncomingLeads(data.leads);
-          if (added > 0) {
-            refreshAll();
-            toast.success(`⚡ Synced ${added} new lead(s) from LinkedIn Clipper!`);
+        const curLeads = prototypeStore.getLeads();
+        const curSeqs = prototypeStore.getSequences();
+        if (curLeads.length > 0 || curSeqs.length > 0) {
+          await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leads: curLeads, sequences: curSeqs }),
+          });
+        }
+      } catch (e) {
+        // Silently continue if offline
+      }
+    };
+
+    initialCloudSync();
+
+    const syncRemoteData = async () => {
+      try {
+        // 1. Sync leads from Firestore / API
+        const leadsRes = await fetch('/api/leads');
+        if (leadsRes.ok) {
+          const data = await leadsRes.json();
+          if (data.leads && Array.isArray(data.leads) && isMounted) {
+            const added = prototypeStore.syncIncomingLeads(data.leads);
+            if (added > 0) {
+              refreshAll();
+              toast.success(`⚡ Synced ${added} new lead(s) with Cloud!`);
+            }
+          }
+        }
+
+        // 2. Sync sequences from Firestore / API
+        const seqRes = await fetch('/api/sequences');
+        if (seqRes.ok) {
+          const data = await seqRes.json();
+          if (data.sequences && Array.isArray(data.sequences) && isMounted) {
+            const addedSeqs = prototypeStore.syncIncomingSequences(data.sequences);
+            if (addedSeqs > 0) {
+              refreshAll();
+            }
           }
         }
       } catch {
@@ -60,14 +93,14 @@ export function useCRM() {
       }
     };
 
-    syncExtensionLeads();
-    const interval = setInterval(syncExtensionLeads, 2000);
-    window.addEventListener('focus', syncExtensionLeads);
+    syncRemoteData();
+    const interval = setInterval(syncRemoteData, 4000);
+    window.addEventListener('focus', syncRemoteData);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
-      window.removeEventListener('focus', syncExtensionLeads);
+      window.removeEventListener('focus', syncRemoteData);
     };
   }, [refreshAll]);
 
@@ -122,6 +155,12 @@ export function useCRM() {
       try {
         const lead = prototypeStore.createLead(input);
         refreshAll();
+        // Persist to Firestore via API
+        fetch('/api/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lead),
+        }).catch((e) => console.warn('Firestore sync warning for lead', e));
         toast.success(`Lead captured: ${lead.firstName} ${lead.lastName}`);
         return lead;
       } catch (err) {
@@ -132,23 +171,39 @@ export function useCRM() {
     [refreshAll]
   );
 
-  const updateLead = useCallback((id: string, updates: Partial<Lead>) => {
-    const updated = prototypeStore.updateLead(id, updates);
-    if (updated) {
-      refreshAll();
-      toast.success('Lead updated successfully');
-    }
-    return updated;
-  }, [refreshAll]);
+  const updateLead = useCallback(
+    (id: string, updates: Partial<Lead>) => {
+      const updated = prototypeStore.updateLead(id, updates);
+      if (updated) {
+        refreshAll();
+        // Persist to Firestore via API
+        fetch('/api/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, ...updates }),
+        }).catch((e) => console.warn('Firestore sync warning for lead update', e));
+        toast.success('Lead updated successfully');
+      }
+      return updated;
+    },
+    [refreshAll]
+  );
 
-  const deleteLead = useCallback((id: string) => {
-    const success = prototypeStore.deleteLead(id);
-    if (success) {
-      refreshAll();
-      toast.success('Lead and associated tasks removed');
-    }
-    return success;
-  }, [refreshAll]);
+  const deleteLead = useCallback(
+    (id: string) => {
+      const success = prototypeStore.deleteLead(id);
+      if (success) {
+        refreshAll();
+        // Persist to Firestore via API
+        fetch(`/api/leads?id=${id}`, { method: 'DELETE' }).catch((e) =>
+          console.warn('Firestore sync warning for lead delete', e)
+        );
+        toast.success('Lead and associated tasks removed');
+      }
+      return success;
+    },
+    [refreshAll]
+  );
 
   const archiveLead = useCallback((id: string, isArchived: boolean = true) => {
     const updated = prototypeStore.archiveLead(id, isArchived);
@@ -234,6 +289,12 @@ export function useCRM() {
     (seq: Sequence) => {
       const saved = prototypeStore.saveSequence(seq);
       refreshAll();
+      // Persist to Firestore via API
+      fetch('/api/sequences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(saved),
+      }).catch((e) => console.warn('Firestore sync warning for sequence', e));
       toast.success(`Sequence "${saved.name}" saved`);
       return saved;
     },
@@ -245,6 +306,12 @@ export function useCRM() {
       const approved = prototypeStore.approveSequence(id, approverName);
       if (approved) {
         refreshAll();
+        // Persist to Firestore via API
+        fetch('/api/sequences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(approved),
+        }).catch((e) => console.warn('Firestore sync warning for sequence approval', e));
         toast.success(`Sequence "${approved.name}" approved and activated!`);
       }
       return approved;
@@ -257,6 +324,11 @@ export function useCRM() {
       const copy = prototypeStore.duplicateSequence(id);
       if (copy) {
         refreshAll();
+        fetch('/api/sequences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(copy),
+        }).catch((e) => console.warn('Firestore sync warning for sequence copy', e));
         toast.success(`Created duplicate "${copy.name}"`);
       }
       return copy;
@@ -269,6 +341,9 @@ export function useCRM() {
       const ok = prototypeStore.deleteSequence(id);
       if (ok) {
         refreshAll();
+        fetch(`/api/sequences?id=${id}`, { method: 'DELETE' }).catch((e) =>
+          console.warn('Firestore sync warning for sequence delete', e)
+        );
         toast.success('Sequence deleted');
       }
       return ok;
@@ -281,6 +356,11 @@ export function useCRM() {
       const updated = prototypeStore.toggleSequenceStatus(id);
       if (updated) {
         refreshAll();
+        fetch('/api/sequences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+        }).catch((e) => console.warn('Firestore sync warning for sequence status', e));
         toast.success(`Sequence ${updated.status === 'active' ? 'activated' : 'paused'}`);
       }
       return updated;
@@ -337,6 +417,29 @@ export function useCRM() {
     return updated;
   }, []);
 
+  const syncToFirestore = useCallback(async () => {
+    try {
+      const curLeads = prototypeStore.getLeads();
+      const curSeqs = prototypeStore.getSequences();
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads: curLeads, sequences: curSeqs }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast.success(`Synced ${data.syncedLeads ?? curLeads.length} leads & ${data.syncedSequences ?? curSeqs.length} sequences to Firestore!`);
+        return true;
+      } else {
+        toast.error('Failed to sync to Firestore');
+        return false;
+      }
+    } catch (e: any) {
+      toast.error('Sync failed: ' + (e?.message || 'Network error'));
+      return false;
+    }
+  }, []);
+
   const resetToDefaults = useCallback(() => {
     prototypeStore.resetToDefaults();
     toast.success('Reset all CRM data to initial sample seed');
@@ -350,6 +453,7 @@ export function useCRM() {
     team,
     settings,
     stats,
+    syncToFirestore,
     // Actions
     createLead,
     updateLead,
