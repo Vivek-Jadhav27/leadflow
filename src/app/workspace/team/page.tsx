@@ -24,6 +24,7 @@ import { InviteMemberModal } from '@/components/team/InviteMemberModal';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { authRepository } from '@/repositories/auth.repository';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { ROUTES } from '@/constants/routes';
 
 interface MemberItem {
   uid: string;
@@ -210,6 +211,28 @@ export default function WorkspaceTeamPage() {
       setActionLoading(null);
     }
   };
+
+  if (role && role !== 'admin') {
+    return (
+      <DashboardLayout>
+        <div className="max-w-xl mx-auto my-12 p-8 bg-white border border-[#dfe3eb] rounded-xl text-center shadow-xs">
+          <div className="h-12 w-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4">
+            <Shield className="h-6 w-6" />
+          </div>
+          <h2 className="text-lg font-bold text-[#2d3e50] mb-2">Workspace Owner Access Required</h2>
+          <p className="text-xs text-[#516f90] mb-6 leading-relaxed">
+            Team and member management is restricted to Workspace Owners. As an Outbound SDR, you can manage your prospects, outreach sequences, and daily follow-up tasks from your dashboard.
+          </p>
+          <Link
+            href={ROUTES.DASHBOARD}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-md font-semibold text-xs text-white bg-[#ff7a59] hover:bg-[#e66343] transition-all shadow-xs"
+          >
+            Return to Dashboard
+          </Link>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>

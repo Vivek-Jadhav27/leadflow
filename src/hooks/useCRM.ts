@@ -14,15 +14,30 @@ import {
 import { prototypeStore } from '@/services/prototypeStore';
 
 export function useCRM() {
-  const [, setTick] = useState(0);
+  const [leads, setLeads] = useState<Lead[]>(() => prototypeStore.getLeads());
+  const [sequences, setSequences] = useState<Sequence[]>(() => prototypeStore.getSequences());
+  const [tasks, setTasks] = useState<Task[]>(() => prototypeStore.getTasks());
+  const [activities, setActivities] = useState<ActivityEvent[]>(() => prototypeStore.getActivityEvents());
+  const [team, setTeam] = useState<TeamMember[]>(() => prototypeStore.getTeamMembers());
+  const [settings, setSettings] = useState<WorkspaceSettings>(() => prototypeStore.getSettings());
+
+  const refreshAll = useCallback(() => {
+    setLeads(prototypeStore.getLeads());
+    setSequences(prototypeStore.getSequences());
+    setTasks(prototypeStore.getTasks());
+    setActivities(prototypeStore.getActivityEvents());
+    setTeam(prototypeStore.getTeamMembers());
+    setSettings(prototypeStore.getSettings());
+  }, []);
 
   // Subscribe to prototype store changes
   useEffect(() => {
+    refreshAll();
     const unsubscribe = prototypeStore.subscribe(() => {
-      setTick((t) => t + 1);
+      refreshAll();
     });
     return unsubscribe;
-  }, []);
+  }, [refreshAll]);
 
   // Synchronize incoming leads from Chrome Extension API
   useEffect(() => {
@@ -36,6 +51,7 @@ export function useCRM() {
         if (data.leads && Array.isArray(data.leads) && isMounted) {
           const added = prototypeStore.syncIncomingLeads(data.leads);
           if (added > 0) {
+            refreshAll();
             toast.success(`⚡ Synced ${added} new lead(s) from LinkedIn Clipper!`);
           }
         }
@@ -45,7 +61,7 @@ export function useCRM() {
     };
 
     syncExtensionLeads();
-    const interval = setInterval(syncExtensionLeads, 4000);
+    const interval = setInterval(syncExtensionLeads, 2000);
     window.addEventListener('focus', syncExtensionLeads);
 
     return () => {
@@ -53,14 +69,7 @@ export function useCRM() {
       clearInterval(interval);
       window.removeEventListener('focus', syncExtensionLeads);
     };
-  }, []);
-
-  const leads = useMemo(() => prototypeStore.getLeads(), [prototypeStore]);
-  const sequences = useMemo(() => prototypeStore.getSequences(), [prototypeStore]);
-  const tasks = useMemo(() => prototypeStore.getTasks(), [prototypeStore]);
-  const activities = useMemo(() => prototypeStore.getActivityEvents(), [prototypeStore]);
-  const team = useMemo(() => prototypeStore.getTeamMembers(), [prototypeStore]);
-  const settings = useMemo(() => prototypeStore.getSettings(), [prototypeStore]);
+  }, [refreshAll]);
 
   // Operational metrics matching decision tree
   const stats = useMemo(() => {
@@ -112,6 +121,7 @@ export function useCRM() {
     (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
         const lead = prototypeStore.createLead(input);
+        refreshAll();
         toast.success(`Lead captured: ${lead.firstName} ${lead.lastName}`);
         return lead;
       } catch (err) {
@@ -119,71 +129,80 @@ export function useCRM() {
         return undefined;
       }
     },
-    []
+    [refreshAll]
   );
 
   const updateLead = useCallback((id: string, updates: Partial<Lead>) => {
     const updated = prototypeStore.updateLead(id, updates);
     if (updated) {
+      refreshAll();
       toast.success('Lead updated successfully');
     }
     return updated;
-  }, []);
+  }, [refreshAll]);
 
   const deleteLead = useCallback((id: string) => {
     const success = prototypeStore.deleteLead(id);
     if (success) {
+      refreshAll();
       toast.success('Lead and associated tasks removed');
     }
     return success;
-  }, []);
+  }, [refreshAll]);
 
   const archiveLead = useCallback((id: string, isArchived: boolean = true) => {
     const updated = prototypeStore.archiveLead(id, isArchived);
     if (updated) {
+      refreshAll();
       toast.success(isArchived ? 'Lead moved to archive' : 'Lead restored to active');
     }
     return updated;
-  }, []);
+  }, [refreshAll]);
 
   const enrichLead = useCallback((id: string, data: EnrichedData) => {
     const updated = prototypeStore.enrichLead(id, data);
     if (updated) {
+      refreshAll();
       toast.success('Lead profile enriched with verified intelligence');
     }
     return updated;
-  }, []);
+  }, [refreshAll]);
 
   const markReply = useCallback((id: string, replyMessage?: string, outcome: string = 'Interested') => {
     const updated = prototypeStore.markReply(id, replyMessage, outcome);
     if (updated) {
+      refreshAll();
       toast.success('Reply recorded. Automated sequence halted.');
     }
     return updated;
-  }, []);
+  }, [refreshAll]);
 
   const advanceLeadStep = useCallback((id: string) => {
     const updated = prototypeStore.advanceLeadStep(id);
     if (updated) {
+      refreshAll();
       toast.success(`Advanced ${updated.firstName} to step ${updated.currentStepNumber}`);
     }
     return updated;
-  }, []);
+  }, [refreshAll]);
 
   const bulkAssign = useCallback((ids: string[], memberId: string) => {
     prototypeStore.bulkAssign(ids, memberId);
+    refreshAll();
     toast.success(`${ids.length} leads reassigned`);
-  }, []);
+  }, [refreshAll]);
 
   const bulkArchive = useCallback((ids: string[]) => {
     prototypeStore.bulkArchive(ids);
+    refreshAll();
     toast.success(`${ids.length} leads archived`);
-  }, []);
+  }, [refreshAll]);
 
   const bulkDelete = useCallback((ids: string[]) => {
     prototypeStore.bulkDelete(ids);
+    refreshAll();
     toast.success(`${ids.length} leads deleted`);
-  }, []);
+  }, [refreshAll]);
 
   // Sequence actions
   const saveSequence = useCallback((seq: Sequence) => {

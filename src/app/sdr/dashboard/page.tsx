@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAuthContext } from '@/context/AuthProvider';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import DashboardPage from '@/app/(dashboard)/dashboard/page';
-import { EmailVerificationNotice } from '@/components/auth/EmailVerificationNotice';
 import { UserCheck, Shield } from 'lucide-react';
 
 export default function SDRDashboard() {
@@ -50,10 +49,8 @@ export default function SDRDashboard() {
           </div>
         </div>
 
-        <EmailVerificationNotice />
         <DashboardPage />
       </div>
     </DashboardLayout>
   );
 }
-

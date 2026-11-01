@@ -22,7 +22,8 @@ export interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const pathname = usePathname();
-  const { user } = useAuthContext();
+  const { user, isAdmin } = useAuthContext();
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin';
 
   const isDashboardActive =
     pathname === ROUTES.DASHBOARD ||
@@ -54,12 +55,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
       icon: CheckSquare,
       isActive: pathname === ROUTES.TASKS || pathname.startsWith('/tasks/'),
     },
-    {
-      label: 'Team Members',
-      href: ROUTES.WORKSPACE_TEAM,
-      icon: Users2,
-      isActive: pathname === ROUTES.WORKSPACE_TEAM || pathname === ROUTES.TEAM,
-    },
+    ...(isOwnerOrAdmin
+      ? [
+          {
+            label: 'Team Members',
+            href: ROUTES.WORKSPACE_TEAM,
+            icon: Users2,
+            isActive: pathname === ROUTES.WORKSPACE_TEAM || pathname === ROUTES.TEAM,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -122,12 +127,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
           </div>
 
           <div className="p-3 rounded-lg bg-[#f8fafc] border border-[#e2e8f0] text-xs space-y-1.5">
-            <span className="font-semibold text-[#2d3e50] block">Provisioning Status</span>
+            <span className="font-semibold text-[#2d3e50] block">
+              {isOwnerOrAdmin ? 'Provisioning Status' : 'SDR Workspace'}
+            </span>
             <div className="flex items-center gap-1.5 text-emerald-600 font-medium text-[11px]">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
               <span>Workspace Active</span>
             </div>
-            <div className="text-[11px] text-[#7c98b6]">Ready for team invites</div>
+            <div className="text-[11px] text-[#7c98b6]">
+              {isOwnerOrAdmin ? 'Ready for team invites' : 'Outreach Ready'}
+            </div>
           </div>
         </div>
 

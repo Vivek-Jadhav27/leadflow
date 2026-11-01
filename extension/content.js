@@ -1,6 +1,6 @@
 /**
- * LeadFlow In-Page Content Script — content.js (v5)
- * Adds floating "+ Add to LeadFlow" button on LinkedIn profiles
+ * LeadFlow In-Page Content Script — content.js (v6)
+ * Adds floating "+ Add to LeadFlow" button on LinkedIn profiles with authentication check.
  * Extraction comes from extractor.js (window.__lfExtract), shared with popup.js
  */
 
@@ -31,16 +31,36 @@
 
     btn.addEventListener('click', async () => {
       const lbl = document.getElementById('lf-btn-label');
-      lbl.innerText = 'Extracting…';
+      lbl.innerText = 'Checking auth…';
 
-      const data = window.__lfExtract();
-      let api = 'https://leadflow-nine-zeta.vercel.app';
+      // 1. Verify authentication
+      let store = {};
       try {
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-          const c = await chrome.storage.local.get('apiEndpoint');
-          if (c.apiEndpoint) api = c.apiEndpoint;
+          store = await chrome.storage.local.get(['apiEndpoint', 'lf_token', 'lf_user']);
         }
       } catch (_) {}
+
+      const token = store.lf_token;
+      const user = store.lf_user;
+      let api = store.apiEndpoint || 'http://localhost:3000';
+
+      if (!token || !user) {
+        lbl.innerText = 'Login required';
+        btn.style.background = '#e66343';
+        showToast(
+          '🔒 <strong>Login Required:</strong> Please click the LeadFlow extension icon in your toolbar to sign in before saving leads.',
+          true
+        );
+        setTimeout(() => {
+          lbl.innerText = '+ Add to LeadFlow';
+          btn.style.background = '#ff7a59';
+        }, 3500);
+        return;
+      }
+
+      lbl.innerText = 'Extracting…';
+      const data = window.__lfExtract();
 
       const payload = {
         firstName:   data.firstName,
@@ -49,17 +69,38 @@
         company:     data.company,
         linkedinUrl: data.linkedinUrl,
         source:      'linkedin_extension',
-        status:      'NEW'
+        status:      'NEW',
+        capturedBy:  user.email || '',
+        workspaceId: user.workspaceId || '',
       };
 
       try {
         lbl.innerText = 'Syncing…';
         const r = await fetch(`${api}/api/leads`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify(payload),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-workspace-id': user.workspaceId || '',
+          },
+          body: JSON.stringify(payload),
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        if (r.status === 401) {
+          lbl.innerText = 'Session expired';
+          btn.style.background = '#dc2626';
+          showToast('🔒 Session expired. Please open the LeadFlow extension popup to log in again.', true);
+          setTimeout(() => {
+            lbl.innerText = '+ Add to LeadFlow';
+            btn.style.background = '#ff7a59';
+          }, 3500);
+          return;
+        }
+
+        if (!r.ok) {
+          const errData = await r.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${r.status}`);
+        }
 
         lbl.innerText = '✓ In LeadFlow';
         btn.style.background = '#16a34a';
@@ -69,7 +110,7 @@
       } catch (err) {
         btn.style.background = '#dc2626';
         lbl.innerText = 'Failed';
-        showToast(`LeadFlow not reachable at ${api}. Make sure dev server is running.`, true);
+        showToast(`Could not save lead: ${err.message || 'Check connection at ' + api}`, true);
         setTimeout(() => { lbl.innerText = '+ Add to LeadFlow'; btn.style.background = '#ff7a59'; }, 3000);
       }
     });
@@ -98,38 +139,29 @@
     #lf-toast {
       position: fixed; bottom: 70px; right: 20px; z-index: 999999;
       background: #1e293b; color: #fff;
-      padding: 10px 16px; border-radius: 8px;
+      padding: 11px 16px; border-radius: 8px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 12px; border-left: 4px solid #ff7a59;
-      box-shadow: 0 8px 24px rgba(0,0,0,.25);
-      opacity: 0; transform: translateY(8px);
-      transition: opacity .25s ease, transform .25s ease;
-      pointer-events: none; max-width: 320px;
+      font-size: 12px; line-height: 1.4;
+      max-width: 340px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+      border-left: 4px solid #ff7a59;
+      display: none; opacity: 0;
+      transition: opacity .2s ease;
     }
-    #lf-toast.lf-show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    #lf-toast.lf-show { display: block; opacity: 1; }
   `;
   document.head.appendChild(style);
 
-  // Init
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initWidget);
-  } else {
-    initWidget();
-  }
-
-  // Observer for LinkedIn SPA navigation
+  // Monitor SPA URL Changes (LinkedIn uses PJAX/History API)
   let lastUrl = location.href;
-  new MutationObserver(() => {
-    const url = location.href;
-    if (url === lastUrl) return;
-    lastUrl = url;
-    const btn = document.getElementById('lf-floating-btn');
-    if (isProfile()) {
-      if (!btn) initWidget();
-    } else if (btn) {
-      btn.remove();
-      const t = document.getElementById('lf-toast');
-      if (t) t.remove();
+  const observer = new MutationObserver(() => {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+      const oldBtn = document.getElementById('lf-floating-btn');
+      if (oldBtn && !isProfile()) oldBtn.remove();
+      if (isProfile()) initWidget();
     }
-  }).observe(document, { subtree: true, childList: true });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  if (isProfile()) initWidget();
 })();

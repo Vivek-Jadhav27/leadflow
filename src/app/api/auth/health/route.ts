@@ -3,6 +3,19 @@ import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
 export async function GET() {
   const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   const vercelEnv = process.env.VERCEL_ENV || 'unknown';
@@ -104,5 +117,8 @@ export async function GET() {
       hasPass: !!process.env.SMTP_PASS,
       emailFrom: process.env.EMAIL_FROM || null,
     },
-  }, { status: 200 });
+  }, {
+    status: 200,
+    headers: corsHeaders,
+  });
 }

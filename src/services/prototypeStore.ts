@@ -84,6 +84,7 @@ class PrototypeStore {
     }
 
     try {
+      localStorage.removeItem('leadflow_deleted_leads_v1');
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -207,9 +208,13 @@ class PrototypeStore {
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
     let addedCount = 0;
 
+    const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
+
     for (const item of incoming) {
+      const itemUrl = normUrl(item.linkedinUrl);
+
       const exists = this.db.leads.some(
-        (l) => l.id === item.id || (item.linkedinUrl && l.linkedinUrl === item.linkedinUrl)
+        (l) => l.id === item.id || (itemUrl && normUrl(l.linkedinUrl) === itemUrl)
       );
 
       if (!exists) {
@@ -257,6 +262,13 @@ class PrototypeStore {
   public deleteLead(id: string): boolean {
     const lead = this.getLeadById(id);
     if (!lead) return false;
+
+    // Call backend API to delete from extension-leads.json
+    try {
+      fetch(`/api/leads?id=${encodeURIComponent(id)}&linkedinUrl=${encodeURIComponent(lead.linkedinUrl || '')}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+    } catch {}
 
     this.db.leads = this.db.leads.filter((l) => l.id !== id);
     this.db.tasks = this.db.tasks.filter((t) => t.leadId !== id);

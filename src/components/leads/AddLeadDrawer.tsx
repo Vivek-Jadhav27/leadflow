@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, AlertCircle, CheckCircle, ExternalLink, Sparkles, Globe, UserCheck } from 'lucide-react';
+import { X, AlertCircle, Sparkles, Globe } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 import { Lead } from '@/types/crm';
 import { useCRM } from '@/hooks/useCRM';
@@ -14,21 +14,17 @@ interface AddLeadDrawerProps {
 }
 
 export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProps) {
-  const { leads, sequences, team, createLead, updateLead } = useCRM();
+  const { leads, createLead, updateLead } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'manual' | 'extension'>('manual');
 
-  // Form fields
+  // Form fields — strictly matching Chrome Extension fields:
+  // firstName, lastName, company, jobTitle, linkedinUrl
   const [firstName, setFirstName] = useState(leadToEdit?.firstName || '');
   const [lastName, setLastName] = useState(leadToEdit?.lastName || '');
   const [company, setCompany] = useState(leadToEdit?.company || '');
   const [jobTitle, setJobTitle] = useState(leadToEdit?.jobTitle || '');
-  const [email, setEmail] = useState(leadToEdit?.email || '');
-  const [phone, setPhone] = useState(leadToEdit?.phone || '');
   const [linkedinUrl, setLinkedinUrl] = useState(leadToEdit?.linkedinUrl || '');
-  const [sequenceId, setSequenceId] = useState(leadToEdit?.sequenceId || '');
-  const [assignedToId, setAssignedToId] = useState(leadToEdit?.assignedToId || (team[0]?.id || 'user_sdr_alex'));
-  const [notes, setNotes] = useState(leadToEdit?.notes || '');
 
   // Errors & Duplicate warning
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -41,46 +37,26 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setLastName(leadToEdit.lastName);
       setCompany(leadToEdit.company);
       setJobTitle(leadToEdit.jobTitle);
-      setEmail(leadToEdit.email || '');
-      setPhone(leadToEdit.phone || '');
       setLinkedinUrl(leadToEdit.linkedinUrl);
-      setSequenceId(leadToEdit.sequenceId || '');
-      setAssignedToId(leadToEdit.assignedToId || '');
-      setNotes(leadToEdit.notes || '');
     } else {
       setFirstName('');
       setLastName('');
       setCompany('');
       setJobTitle('');
-      setEmail('');
-      setPhone('');
       setLinkedinUrl('');
-      setSequenceId(sequences[0]?.id || '');
-      setAssignedToId(team[1]?.id || team[0]?.id || 'user_sdr_alex');
-      setNotes('');
     }
     setErrors({});
     setDuplicateWarning(null);
-  }, [leadToEdit, isOpen, team, sequences]);
+  }, [leadToEdit, isOpen]);
 
   if (!isOpen) return null;
 
-  // Active LinkedIn sequences only
-  const activeSequences = sequences.filter((s) => s.status !== 'archived');
-
-  // Decision 1: Duplicate check logic
-  const checkDuplicates = (mail: string, liUrl: string) => {
-    if (leadToEdit) return; // Ignore during edit
-    const normMail = mail.toLowerCase().trim();
+  // Duplicate check logic via LinkedIn URL
+  const checkDuplicates = (liUrl: string) => {
+    if (leadToEdit) return;
     const normLi = liUrl.toLowerCase().trim();
 
-    const existingMail = normMail ? leads.find((l) => l.email && l.email.toLowerCase() === normMail) : null;
-    if (existingMail) {
-      setDuplicateWarning(`Decision 1 Flag: Lead with email "${normMail}" already exists (${existingMail.firstName} ${existingMail.lastName} at ${existingMail.company}). Opening this will update existing record.`);
-      return;
-    }
-
-    const existingLi = normLi ? leads.find((l) => l.linkedinUrl.toLowerCase() === normLi) : null;
+    const existingLi = normLi ? leads.find((l) => l.linkedinUrl && l.linkedinUrl.toLowerCase() === normLi) : null;
     if (existingLi) {
       setDuplicateWarning(`Decision 1 Flag: Lead with LinkedIn URL already exists (${existingLi.firstName} ${existingLi.lastName} at ${existingLi.company}). Avoid duplicate creation.`);
       return;
@@ -97,12 +73,6 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     if (!company.trim()) errs.company = 'Company name is required.';
     if (!jobTitle.trim()) errs.jobTitle = 'Job title is required.';
 
-    if (!email.trim()) {
-      errs.email = 'Corporate email address is required.';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      errs.email = 'Please provide a valid email format (e.g. name@company.com).';
-    }
-
     if (!linkedinUrl.trim()) {
       errs.linkedinUrl = 'LinkedIn profile URL is required.';
     } else if (!linkedinUrl.toLowerCase().includes('linkedin.com/')) {
@@ -117,24 +87,13 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     e.preventDefault();
     if (!validate()) return;
 
-    const assignedMember = team.find((m) => m.id === assignedToId) || team[0];
-    const selectedSeq = sequences.find((s) => s.id === sequenceId);
-
     if (leadToEdit) {
       updateLead(leadToEdit.id, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         company: company.trim(),
         jobTitle: jobTitle.trim(),
-        email: email.trim(),
-        phone: phone.trim() || undefined,
         linkedinUrl: linkedinUrl.trim(),
-        sequenceId: sequenceId || undefined,
-        sequenceName: selectedSeq?.name,
-        assignedToId: assignedMember.id,
-        assignedToName: assignedMember.name,
-        assignedToEmail: assignedMember.email,
-        notes: notes.trim(),
       });
     } else {
       createLead({
@@ -142,23 +101,14 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         lastName: lastName.trim(),
         company: company.trim(),
         jobTitle: jobTitle.trim(),
-        email: email.trim(),
-        phone: phone.trim() || undefined,
         linkedinUrl: linkedinUrl.trim(),
+        email: null,
         channel: 'linkedin',
-        sequenceId: sequenceId || undefined,
-        sequenceName: selectedSeq?.name,
-        currentStepNumber: sequenceId ? 1 : 0,
-        totalSteps: selectedSeq ? selectedSeq.steps.length : 0,
-        connectionStatus: sequenceId ? 'request_pending' : 'not_started',
-        outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
+        currentStepNumber: 0,
+        totalSteps: 4,
+        connectionStatus: 'not_started',
+        outreachStatus: 'unassigned',
         disposition: 'active',
-        assignedToId: assignedMember.id,
-        assignedToName: assignedMember.name,
-        assignedToEmail: assignedMember.email,
-        nextFollowUpDate: sequenceId ? new Date().toISOString().split('T')[0] : undefined,
-        nextActionTitle: selectedSeq?.steps[0]?.title || undefined,
-        notes: notes.trim(),
       });
     }
 
@@ -175,7 +125,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
               {leadToEdit ? 'Edit Prospect Record' : 'Capture LinkedIn Lead'}
             </h3>
             <p className="text-xs text-[#516f90]">
-              {leadToEdit ? 'Update contact, connection state, and sequence parameters' : 'LeadFlow Decision 1: Capture, duplicate check, and enrich'}
+              {leadToEdit ? 'Update contact details' : 'LeadFlow Decision 1: Capture and duplicate check'}
             </p>
           </div>
           <button
@@ -199,7 +149,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
             >
               Manual Prospect Entry
             </button>
-            <button
+            {/* <button
               onClick={() => setActiveTab('extension')}
               className={`py-2.5 px-3 font-bold border-b-2 flex items-center gap-1.5 transition-colors ${
                 activeTab === 'extension'
@@ -209,7 +159,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
             >
               <Globe className="h-3.5 w-3.5" />
               <span>Browser Extension Capture</span>
-            </button>
+            </button> */}
           </div>
         )}
 
@@ -223,7 +173,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                   <span>LeadFlow LinkedIn Extension Capture</span>
                 </div>
                 <p className="text-[11px] leading-relaxed">
-                  Browse any LinkedIn profile or Sales Navigator account and click <strong>&quot;Capture Lead to LeadFlow&quot;</strong> in your browser toolbar to automatically run Decision 1 duplicate check and enroll into your cadence.
+                  Browse any LinkedIn profile and click <strong>&quot;+ Add Lead to LeadFlow&quot;</strong> in your extension popup or the floating button to capture instantly.
                 </p>
               </div>
 
@@ -232,7 +182,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                   Simulate Extension Capture
                 </h4>
                 <p className="text-[#516f90] text-[11px]">
-                  Click below to simulate auto-capturing a verified prospect from LinkedIn:
+                  Click below to pre-fill verified prospect details matching extension output:
                 </p>
                 <Button
                   type="button"
@@ -241,11 +191,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                     setLastName('Volkov');
                     setCompany('Krypton Cyber Defense');
                     setJobTitle('Chief Information Security Officer');
-                    setEmail('dmitri.volkov@kryptoncyber.com');
-                    setPhone('+1 (415) 332-9011');
                     setLinkedinUrl('https://linkedin.com/in/dmitri-volkov-ciso');
-                    setSequenceId(sequences[0]?.id || '');
-                    setNotes('Captured via LeadFlow Chrome Extension from LinkedIn profile on Oct 29.');
                     setActiveTab('manual');
                   }}
                   className="w-full bg-[#142b55] hover:bg-[#1f3b73] text-white font-bold text-xs flex items-center justify-center gap-2"
@@ -334,25 +280,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                 </div>
               </div>
 
-              {/* Email & LinkedIn */}
-              <div className="space-y-1">
-                {/* <label className="font-bold text-[#33475b]">
-                  Corporate Email <span className="text-rose-500">*</span>
-                </label> */}
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    checkDuplicates(e.target.value, linkedinUrl);
-                  }}
-                  placeholder="elena.rostova@cloudscale.ai"
-                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
-                />
-                {errors.email && <p className="text-[10px] text-rose-500">{errors.email}</p>}
-              </div>
-
+              {/* LinkedIn URL */}
               <div className="space-y-1">
                 <label className="font-bold text-[#33475b]">
                   LinkedIn Profile URL <span className="text-rose-500">*</span>
@@ -363,79 +291,12 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                   value={linkedinUrl}
                   onChange={(e) => {
                     setLinkedinUrl(e.target.value);
-                    checkDuplicates(email, e.target.value);
+                    checkDuplicates(e.target.value);
                   }}
                   placeholder="https://linkedin.com/in/elena-rostova"
                   className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
                 />
                 {errors.linkedinUrl && <p className="text-[10px] text-rose-500">{errors.linkedinUrl}</p>}
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-[#33475b]">
-                  Phone (Optional)
-                </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+1 (555) 019-2831"
-                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
-                />
-              </div>
-
-              {/* LinkedIn Sequence Assignment */}
-              <div className="space-y-1 pt-2 border-t border-[#eaf0f6]">
-                <label className="font-bold text-[#33475b]">
-                  Assign to LinkedIn Outreach Cadence
-                </label>
-                <select
-                  value={sequenceId}
-                  onChange={(e) => setSequenceId(e.target.value)}
-                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
-                >
-                  <option value="">No Sequence (Unassigned Prospect Pool)</option>
-                  {activeSequences.map((seq) => (
-                    <option key={seq.id} value={seq.id}>
-                      {seq.name} ({seq.steps.length} steps)
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-[#7c98b6]">
-                  Enrolls prospect into Decision 2 LinkedIn connection gate.
-                </p>
-              </div>
-
-              {/* Assigned Representative */}
-              <div className="space-y-1">
-                <label className="font-bold text-[#33475b]">
-                  Assigned Team Member <span className="text-rose-500">*</span>
-                </label>
-                <select
-                  value={assignedToId}
-                  onChange={(e) => setAssignedToId(e.target.value)}
-                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
-                >
-                  {team.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name} ({member.roleTitle})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* SDR Notes */}
-              <div className="space-y-1">
-                <label className="font-bold text-[#33475b]">
-                  SDR Notes &amp; Pain Points (Optional)
-                </label>
-                <textarea
-                  rows={3}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Growth trigger, tech stack insights, personalized connection hook..."
-                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-2 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59] resize-none"
-                />
               </div>
             </form>
           )}

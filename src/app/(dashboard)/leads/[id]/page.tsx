@@ -209,7 +209,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           )}
 
           {/* Enrich Lead */}
-          <Button
+          {/* <Button
             size="sm"
             variant="outline"
             onClick={() => setIsEnrichOpen(true)}
@@ -217,7 +217,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           >
             <Sparkles className="h-3.5 w-3.5 text-amber-500" />
             <span>{lead.disposition === 'enriched' ? 'Edit Intelligence' : 'Enrich Lead'}</span>
-          </Button>
+          </Button> */}
 
           {/* Edit Details */}
           <Button

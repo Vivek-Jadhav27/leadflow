@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
           email: emailNorm,
           password: password,
           displayName: companyName.trim(),
-          emailVerified: false,
+          emailVerified: true,
         });
         uid = newAuthUser.uid;
       } catch (authErr: unknown) {

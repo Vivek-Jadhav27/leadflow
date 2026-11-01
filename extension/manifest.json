@@ -15,10 +15,12 @@
   ],
   "host_permissions": [
     "https://*.linkedin.com/*",
+    "http://localhost:*/*",
+    "http://localhost/*",
+    "http://127.0.0.1:*/*",
+    "http://127.0.0.1/*",
     "https://leadflow-nine-zeta.vercel.app/*",
     "https://*.vercel.app/*",
-    "http://localhost:3000/*",
-    "http://127.0.0.1:3000/*",
     "https://*.leadflow.io/*"
   ],
   "action": {

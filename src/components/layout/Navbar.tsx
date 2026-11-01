@@ -25,13 +25,14 @@ import { GlobalSearchModal } from '@/components/common/GlobalSearchModal';
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, logout, switchRole } = useAuthContext();
+  const { user, logout, switchRole, isAdmin } = useAuthContext();
   const { stats, tasks, resetToDefaults } = useCRM();
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
 
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin';
   const pendingTasksCount = tasks.filter((t) => t.status === 'pending' || t.status === 'overdue').length;
 
   const navLinks = [
@@ -39,7 +40,7 @@ export const Navbar: React.FC = () => {
     { label: 'Leads', href: ROUTES.LEADS, badge: stats.totalLeads },
     { label: 'Sequences', href: ROUTES.SEQUENCES },
     { label: 'Tasks', href: ROUTES.TASKS, badge: pendingTasksCount > 0 ? pendingTasksCount : null },
-    { label: 'Team', href: ROUTES.TEAM },
+    ...(isOwnerOrAdmin ? [{ label: 'Team', href: ROUTES.TEAM }] : []),
     {
       label: 'Journey Canvas',
       href: ROUTES.WALKTHROUGH,

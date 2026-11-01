@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>LeadFlow</title>
+  <title>LeadFlow - LinkedIn Lead Clipper</title>
   <style>
     :root {
       --orange: #ff7a59;
@@ -17,11 +17,13 @@
       --green-bg: #dcfce7;
       --red: #dc2626;
       --red-bg: #fee2e2;
+      --teal: #0091ae;
+      --teal-bg: #e5f5f8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 
-    body { width: 340px; background: var(--bg); color: var(--text); font-size: 13px; }
+    body { width: 350px; background: var(--bg); color: var(--text); font-size: 13px; }
 
     /* ── Header ── */
     .hdr {
@@ -42,9 +44,20 @@
     }
     .pill.on  { background: var(--green-bg); color: var(--green); }
     .pill.off { background: #f1f5f9; color: var(--muted); }
+    .pill.warn { background: #fef3c7; color: #b45309; }
+
+    .user-chip {
+      display: none; align-items: center; gap: 4px; font-size: 10px; font-weight: 600;
+      background: var(--teal-bg); color: var(--teal); padding: 2px 6px; border-radius: 999px;
+      max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .user-chip .role-tag {
+      background: #0091ae; color: #fff; padding: 0 4px; border-radius: 3px; font-size: 9px;
+    }
+
     .icon-btn {
       background: none; border: none; cursor: pointer; color: var(--muted);
-      padding: 3px; border-radius: 4px; font-size: 14px; line-height: 1;
+      padding: 4px; border-radius: 4px; font-size: 13px; line-height: 1;
       transition: background .15s;
     }
     .icon-btn:hover { background: #f1f5f9; color: var(--text); }
@@ -59,16 +72,61 @@
       text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; display: block; }
     .settings input {
       width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px;
-      font-size: 12px;
+      font-size: 12px; margin-bottom: 6px;
     }
-    .settings-footer { display: flex; justify-content: flex-end; margin-top: 6px; }
+    .settings-quick { display: flex; gap: 6px; margin-bottom: 8px; }
+    .btn-quick {
+      padding: 5px 8px; background: #f1f5f9; border: 1px solid var(--border); border-radius: 4px;
+      font-size: 10.5px; font-weight: 600; cursor: pointer; color: var(--navy); transition: all .15s;
+    }
+    .btn-quick:hover { background: #e2e8f0; }
+    .btn-quick.active {
+      background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; font-weight: 700;
+    }
+    .settings-footer { display: flex; justify-content: flex-end; margin-top: 4px; }
     .btn-sm {
-      padding: 3px 10px; background: var(--navy); color: #fff; border: none;
-      border-radius: 4px; font-size: 11px; cursor: pointer;
+      padding: 4px 12px; background: var(--navy); color: #fff; border: none;
+      border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer;
     }
 
     /* ── Body ── */
     .body { padding: 12px 14px; }
+
+    /* ── Login View ── */
+    .login-box {
+      background: #ffffff; border: 1px solid var(--border); border-radius: 8px;
+      padding: 16px 14px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+    }
+    .login-icon {
+      width: 36px; height: 36px; background: #fff5f2; color: var(--orange);
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: 18px; margin: 0 auto 10px;
+    }
+    .login-title { font-size: 14px; font-weight: 700; color: var(--navy); text-align: center; margin-bottom: 4px; }
+    .login-desc  { font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 12px; line-height: 1.4; }
+
+    /* Server toggle bar inside login */
+    .server-bar {
+      display: flex; gap: 6px; margin-bottom: 12px; background: #f8fafc; padding: 3px;
+      border-radius: 6px; border: 1px solid var(--border);
+    }
+    .server-tab {
+      flex: 1; padding: 5px; text-align: center; font-size: 10.5px; font-weight: 600;
+      color: var(--muted); border-radius: 4px; cursor: pointer; border: none; background: transparent;
+      transition: all .15s;
+    }
+    .server-tab.active {
+      background: #ffffff; color: var(--navy); font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    .login-alert {
+      display: none; background: var(--red-bg); border: 1px solid #fecaca; color: var(--red);
+      padding: 8px 10px; border-radius: 6px; font-size: 11.5px; margin-bottom: 12px; line-height: 1.4;
+    }
+    .login-endpoint {
+      font-size: 10px; color: var(--muted); text-align: center; margin-top: 10px;
+    }
+    .login-endpoint a { color: var(--orange); text-decoration: none; cursor: pointer; font-weight: 600; }
 
     /* Not-LinkedIn state */
     .empty { text-align: center; padding: 28px 12px; }
@@ -80,7 +138,7 @@
       border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 11px;
     }
 
-    /* ── Name card (no avatar) ── */
+    /* ── Name card ── */
     .name-card {
       background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
       padding: 10px 12px; margin-bottom: 10px;
@@ -118,7 +176,7 @@
     .auto-tag { text-transform: none; font-weight: 500; color: var(--orange); font-size: 10px; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-    input[type="text"], input[type="url"] {
+    input[type="text"], input[type="url"], input[type="email"], input[type="password"] {
       width: 100%; padding: 7px 9px; border: 1px solid var(--border);
       border-radius: 6px; font-size: 12px; color: var(--text); background: #fff;
       transition: border-color .15s, box-shadow .15s;
@@ -163,15 +221,24 @@
     Lead<em>Flow</em>
   </div>
   <div class="hdr-right">
-    <span id="status-pill" class="pill off">Detecting…</span>
+    <div id="user-chip" class="user-chip" title="Signed in user">
+      <span id="user-email-label">user</span>
+      <span id="user-role-label" class="role-tag">SDR</span>
+    </div>
+    <span id="status-pill" class="pill off">Checking…</span>
+    <button id="btn-logout" class="icon-btn" title="Sign Out" style="display:none;">🚪</button>
     <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
   </div>
 </div>
 
-<!-- Settings -->
+<!-- Settings Drawer -->
 <div id="settings" class="settings">
   <label>LeadFlow API Endpoint</label>
-  <input id="api-input" type="text" value="https://leadflow-nine-zeta.vercel.app" placeholder="https://leadflow-nine-zeta.vercel.app" />
+  <div class="settings-quick">
+    <button type="button" class="btn-quick" id="btn-set-localhost">Localhost:3000</button>
+    <button type="button" class="btn-quick" id="btn-set-prod">Production (Vercel)</button>
+  </div>
+  <input id="api-input" type="text" value="http://localhost:3000" placeholder="http://localhost:3000" />
   <div class="settings-footer">
     <button id="btn-save-settings" class="btn-sm">Save</button>
   </div>
@@ -180,16 +247,52 @@
 <!-- Body -->
 <div class="body">
 
-  <!-- Not on LinkedIn -->
-  <div id="view-empty" class="empty" style="display:none">
+  <!-- View 1: Login Required -->
+  <div id="view-login" style="display:none;">
+    <div class="login-box">
+      <div class="login-icon">🔒</div>
+      <h3 class="login-title">Sign In to LeadFlow</h3>
+      <p class="login-desc">Login with your SDR or Admin workspace credentials before clipping LinkedIn leads.</p>
+
+      <!-- Server toggle bar -->
+      <div class="server-bar">
+        <button type="button" class="server-tab active" id="tab-server-local">💻 Localhost (3000)</button>
+        <button type="button" class="server-tab" id="tab-server-prod">☁️ Vercel Cloud</button>
+      </div>
+
+      <div id="login-alert" class="login-alert"></div>
+
+      <form id="form-login">
+        <div class="fg">
+          <label for="login-email">Email Address</label>
+          <input id="login-email" type="email" placeholder="sdr@yourcompany.com" required autocomplete="email" />
+        </div>
+
+        <div class="fg">
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+
+        <button type="submit" id="btn-login" class="btn-add">Sign In</button>
+      </form>
+
+      <div class="login-endpoint">
+        Target: <span id="current-endpoint-label">http://localhost:3000</span> ·
+        <a id="btn-change-endpoint">Settings</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- View 2: Not on LinkedIn (Logged In) -->
+  <div id="view-empty" class="empty" style="display:none;">
     <div class="empty-icon">💼</div>
     <h3>No LinkedIn Profile Open</h3>
     <p>Navigate to any LinkedIn profile to capture this prospect into LeadFlow.</p>
     <a href="https://www.linkedin.com" target="_blank" class="btn-li">Open LinkedIn</a>
   </div>
 
-  <!-- Profile view -->
-  <div id="view-lead">
+  <!-- View 3: Profile Detected & Ready (Logged In) -->
+  <div id="view-lead" style="display:none;">
     <!-- Name card + Refresh -->
     <div class="name-card">
       <div class="name-card-info">
@@ -217,12 +320,12 @@
 
       <div class="fg">
         <label>Position / Title <span class="auto-tag">Auto</span></label>
-        <input id="jobTitle" type="text" placeholder="e.g. CEO & Founder" required />
+        <input id="jobTitle" type="text" placeholder="e.g. Account Executive" required />
       </div>
 
       <div class="fg">
         <label>Company Name <span class="auto-tag">Auto</span></label>
-        <input id="company" type="text" placeholder="e.g. KaashTech LLC" required />
+        <input id="company" type="text" placeholder="e.g. Acme Corp" required />
       </div>
 
       <div class="fg">
@@ -240,7 +343,7 @@
 
 <!-- Footer -->
 <div class="footer">
-  <span>LeadFlow Outbound CRM</span>
+  <span id="footer-workspace-name">LeadFlow CRM</span>
   <a id="crm-link" href="http://localhost:3000/leads" target="_blank">Open Leads →</a>
 </div>
 

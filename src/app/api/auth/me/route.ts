@@ -47,31 +47,31 @@ export async function GET(req: NextRequest) {
       console.warn('[AuthMe] Owned workspaces query error:', e);
     }
 
-    // 2. Query memberships by uid only (single field query avoids composite index requirement)
-    try {
-      const membersSnap = await adminDb
-        .collectionGroup('members')
-        .where('uid', '==', uid)
-        .get();
+    // 2. Look up membership via profile.currentWorkspaceId (no composite index needed)
+    //    This avoids the FAILED_PRECONDITION error from collectionGroup queries.
+    const profileWorkspaceId = profile?.currentWorkspaceId;
+    if (profileWorkspaceId && !workspaceIdSet.has(profileWorkspaceId)) {
+      try {
+        const memberDoc = await adminDb
+          .collection('workspaces')
+          .doc(profileWorkspaceId)
+          .collection('members')
+          .doc(uid)
+          .get();
 
-      for (const memberDoc of membersSnap.docs) {
-        const memberData = memberDoc.data();
-        if (memberData?.status === 'active') {
-          const wsDocRef = memberDoc.ref.parent.parent;
-          if (wsDocRef && !workspaceIdSet.has(wsDocRef.id)) {
-            const wsSnapshot = await wsDocRef.get();
-            if (wsSnapshot.exists) {
-              const wsData = wsSnapshot.data() as Workspace;
-              if (wsData.status === 'active') {
-                accessibleWorkspaces.push(wsData);
-                workspaceIdSet.add(wsData.workspaceId);
-              }
+        if (memberDoc.exists && memberDoc.data()?.status === 'active') {
+          const wsSnapshot = await adminDb.collection('workspaces').doc(profileWorkspaceId).get();
+          if (wsSnapshot.exists) {
+            const wsData = wsSnapshot.data() as Workspace;
+            if (wsData.status === 'active') {
+              accessibleWorkspaces.push(wsData);
+              workspaceIdSet.add(wsData.workspaceId);
             }
           }
         }
+      } catch (e) {
+        console.warn('[AuthMe] Membership lookup error:', e);
       }
-    } catch (e) {
-      console.warn('[AuthMe] CollectionGroup members query error:', e);
     }
 
     // 3. Resolve active workspace

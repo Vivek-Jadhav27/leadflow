@@ -110,6 +110,26 @@ export default function TeamPage() {
     setReassignMember(null);
   };
 
+  if (role && role !== 'admin') {
+    return (
+      <div className="max-w-xl mx-auto my-12 p-8 bg-white border border-[#dfe3eb] rounded-xl text-center shadow-xs">
+        <div className="h-12 w-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4">
+          <Shield className="h-6 w-6" />
+        </div>
+        <h2 className="text-lg font-bold text-[#2d3e50] mb-2">Workspace Owner Access Required</h2>
+        <p className="text-xs text-[#516f90] mb-6 leading-relaxed">
+          Team member management and invitations are reserved for Workspace Owners. As an Outbound SDR, you can manage your assigned leads and outreach sequences from your dashboard.
+        </p>
+        <Button
+          onClick={() => (window.location.href = '/dashboard')}
+          className="bg-[#ff7a59] hover:bg-[#e66343] text-white text-xs font-semibold"
+        >
+          Return to Dashboard
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
