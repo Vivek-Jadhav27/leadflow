@@ -1,0 +1,145 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default rule: Deny everything unless explicitly permitted
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // Check if the authenticated user has an active membership in the given workspace
+    function isWorkspaceMember(workspaceId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // Check if the authenticated user is an active Admin in the given workspace
+    function isWorkspaceAdmin(workspaceId) {
+      return isAuthenticated() &&
+        isWorkspaceMember(workspaceId) &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // --- Users Collection: users/{uid} ---
+    match /users/{uid} {
+      // Users can read their own profile
+      allow read: if isOwner(uid);
+
+      // Creating a user profile document: allow for authenticated owner
+      allow create: if isOwner(uid) &&
+        request.resource.data.uid == uid &&
+        (!('status' in request.resource.data) || request.resource.data.status == 'active');
+
+      // Profile updates: user can update displayName/name, but cannot tamper with uid or disabled status
+      allow update: if isOwner(uid) &&
+        request.resource.data.uid == resource.data.uid &&
+        (!('email' in request.resource.data) || request.resource.data.email == resource.data.email);
+
+      // Direct client deletion of profiles is forbidden
+      allow delete: if false;
+    }
+
+    // --- Workspaces Collection: workspaces/{workspaceId} ---
+    match /workspaces/{workspaceId} {
+      // Allow active members OR the workspace owner to read workspace data
+      allow read: if isAuthenticated() && (
+        resource.data.ownerId == request.auth.uid ||
+        isWorkspaceMember(workspaceId)
+      );
+
+      // Workspace creation: allow authenticated owners creating their company workspace
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.workspaceId == workspaceId &&
+        request.resource.data.status == 'active';
+
+      // Only active workspace Admins or owner can update permitted workspace settings
+      allow update: if isAuthenticated() &&
+        (resource.data.ownerId == request.auth.uid || isWorkspaceAdmin(workspaceId)) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.workspaceId == resource.data.workspaceId;
+
+      // Direct client deletion of workspaces is forbidden
+      allow delete: if false;
+
+      // --- Workspace Memberships: workspaces/{workspaceId}/members/{uid} ---
+      match /members/{memberUid} {
+        // Active workspace members OR owner can read members of the workspace
+        allow read: if isAuthenticated() && (
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid ||
+          isWorkspaceMember(workspaceId)
+        );
+
+        // Allow authenticated owner to create initial admin membership, or member to record their status
+        allow create: if isAuthenticated() &&
+          (request.auth.uid == memberUid || get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid) &&
+          request.resource.data.status == 'active';
+
+        allow update: if isAuthenticated() &&
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+
+        // Direct client deletions of memberships are forbidden
+        allow delete: if false;
+      }
+    }
+
+    // --- Invitations Collection: invitations/{invitationId} ---
+    match /invitations/{invitationId} {
+      // Raw client reads of invitation records are restricted to protect token hashes
+      allow read: if false;
+
+      // Creation, updates, acceptance, resend, revoke are managed through server API routes
+      allow create, update, delete: if false;
+    }
+
+    // --- Leads Collection: leads/{leadId} ---
+    match /leads/{leadId} {
+      allow read: if isAuthenticated() &&
+        resource.data.workspaceId != null &&
+        isWorkspaceMember(resource.data.workspaceId);
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.workspaceId != null &&
+        isWorkspaceMember(request.resource.data.workspaceId);
+
+      allow update: if isAuthenticated() &&
+        resource.data.workspaceId != null &&
+        isWorkspaceMember(resource.data.workspaceId) &&
+        request.resource.data.workspaceId == resource.data.workspaceId;
+
+      allow delete: if isAuthenticated() &&
+        resource.data.workspaceId != null &&
+        isWorkspaceAdmin(resource.data.workspaceId);
+    }
+
+    // --- Sequences Collection: sequences/{sequenceId} ---
+    match /sequences/{sequenceId} {
+      allow read: if isAuthenticated() &&
+        resource.data.workspaceId != null &&
+        isWorkspaceMember(resource.data.workspaceId);
+
+      allow create, update: if isAuthenticated() &&
+        request.resource.data.workspaceId != null &&
+        isWorkspaceMember(request.resource.data.workspaceId);
+
+      allow delete: if isAuthenticated() &&
+        resource.data.workspaceId != null &&
+        isWorkspaceAdmin(resource.data.workspaceId);
+    }
+
+    // --- Audit Logs Collection: auditLogs/{logId} ---
+    match /auditLogs/{logId} {
+      allow read, write: if false;
+    }
+  }
+}

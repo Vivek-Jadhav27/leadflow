@@ -35,16 +35,16 @@ export default function TeamPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('Outbound SDR');
 
-  // Simulated pending invitations from canvas (Lane 1: Admin invites -> Lane 2: SDR accepts/declines)
-  const [pendingInvites, setPendingInvites] = useState([
-    {
-      id: 'inv_1',
-      name: 'Morgan Blake',
-      email: 'morgan.blake@leadflow.io',
-      role: 'Outbound SDR',
-      invitedAt: 'Today',
-    },
-  ]);
+  // Pending invitations list
+  const [pendingInvites, setPendingInvites] = useState<
+    Array<{
+      id: string;
+      name: string;
+      email: string;
+      role: string;
+      invitedAt: string;
+    }>
+  >([]);
 
   // Reassignment modal
   const [reassignMember, setReassignMember] = useState<TeamMember | null>(null);
