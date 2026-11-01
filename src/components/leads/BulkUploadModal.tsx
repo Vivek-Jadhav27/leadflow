@@ -269,12 +269,12 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         company: r.company.trim(),
         jobTitle: r.jobTitle.trim(),
         linkedinUrl: r.linkedinUrl.trim(),
-        email: r.email ? r.email.trim() : null,
-        phone: r.phone ? r.phone.trim() : null,
+        email: null,
+        phone: null,
         sequenceId: selectedSequenceId || null,
         assignedToId: selectedAssigneeId || null,
         assignedToName: selectedAssignee?.name || null,
-        notes: r.location ? `Location: ${r.location}` : 'Imported via CSV',
+        notes: 'Imported via CSV',
       }));
 
       await bulkCreateLeads(leadsPayload, {
@@ -338,7 +338,7 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
                   </h4>
                   <p className="text-[11px] text-slate-500 max-w-xl">
                     Download this sample CSV file pre-formatted with the exact LinkedIn extension columns:
-                    <span className="font-semibold text-slate-700"> firstName, lastName, jobTitle, company, linkedinUrl, email, phone</span>.
+                    <span className="font-semibold text-slate-700"> firstName, lastName, jobTitle, company, linkedinUrl</span>.
                   </p>
                 </div>
                 <Button
