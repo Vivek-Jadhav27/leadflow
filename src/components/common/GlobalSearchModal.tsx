@@ -42,7 +42,7 @@ export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
         (l) =>
           `${l.firstName} ${l.lastName}`.toLowerCase().includes(q) ||
           l.company.toLowerCase().includes(q) ||
-          l.email.toLowerCase().includes(q) ||
+          (l.email ? l.email.toLowerCase().includes(q) : false) ||
           l.jobTitle.toLowerCase().includes(q)
       ).slice(0, 5)
     : [];

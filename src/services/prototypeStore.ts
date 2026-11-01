@@ -840,8 +840,8 @@ class PrototypeStore {
           stepNumber: 1,
           type: 'linkedin_connect',
           dueDate: new Date().toISOString().split('T')[0],
-          assignedToId: newLead.assignedToId,
-          assignedToName: newLead.assignedToName,
+          assignedToId: newLead.assignedToId ?? '',
+          assignedToName: newLead.assignedToName ?? '',
           priority: 'high',
           status: 'pending',
           messageTemplate: firstStep.messageTemplate,
@@ -851,6 +851,41 @@ class PrototypeStore {
 
     this.persistAndNotify();
     return newLead;
+  }
+
+  public syncIncomingLeads(incoming: any[]): number {
+    if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+    let addedCount = 0;
+
+    for (const item of incoming) {
+      const exists = this.db.leads.some(
+        (l) => l.id === item.id || (item.linkedinUrl && l.linkedinUrl === item.linkedinUrl)
+      );
+
+      if (!exists) {
+        this.createLead({
+          firstName: item.firstName || '',
+          lastName: item.lastName || '',
+          company: item.company || '',
+          jobTitle: item.jobTitle || 'Prospect',
+          email: item.email || null,
+          phone: item.phone || null,
+          linkedinUrl: item.linkedinUrl || '',
+          channel: 'linkedin',
+          sequenceId: item.sequenceId || null,
+          sequenceName: item.sequenceName || (item.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
+          currentStepNumber: item.currentStepNumber || 1,
+          totalSteps: 4,
+          connectionStatus: item.connectionStatus || 'not_connected',
+          outreachStatus: item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned'),
+          disposition: item.disposition || 'active',
+          notes: item.notes || 'Captured via LeadFlow Chrome Extension',
+        });
+        addedCount++;
+      }
+    }
+
+    return addedCount;
   }
 
   public updateLead(id: string, updates: Partial<Lead>): Lead | undefined {
@@ -971,8 +1006,8 @@ class PrototypeStore {
       leadLinkedin: lead.linkedinUrl,
       type: 'manual_review',
       dueDate: now.split('T')[0],
-      assignedToId: lead.assignedToId,
-      assignedToName: lead.assignedToName,
+      assignedToId: lead.assignedToId ?? '',
+      assignedToName: lead.assignedToName ?? '',
       priority: 'high',
       status: 'pending',
     });

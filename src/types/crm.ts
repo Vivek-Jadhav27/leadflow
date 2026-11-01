@@ -58,31 +58,31 @@ export interface Lead {
   lastName: string;
   company: string;
   jobTitle: string;
-  email: string;
-  phone?: string;
+  email: string | null;
+  phone?: string | null;
   linkedinUrl: string;
   channel: 'linkedin';
-  sequenceId?: string;
-  sequenceName?: string;
+  sequenceId?: string | null;
+  sequenceName?: string | null;
   currentStepNumber: number;
   totalSteps?: number;
   connectionStatus: LinkedInConnectionStatus;
   outreachStatus: OutreachStatus;
   disposition: LeadOutcome;
-  outcome?: string;
-  assignedToId: string;
-  assignedToName: string;
-  assignedToEmail: string;
-  nextFollowUpDate?: string; // YYYY-MM-DD
-  nextActionTitle?: string;
-  notes?: string;
+  outcome?: string | null;
+  assignedToId?: string | null;
+  assignedToName?: string | null;
+  assignedToEmail?: string | null;
+  nextFollowUpDate?: string | null; // YYYY-MM-DD
+  nextActionTitle?: string | null;
+  notes?: string | null;
   enrichedData?: EnrichedData;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface SequenceStep {
-  id: string;
+  id?: string;
   stepNumber: number;
   actionType:
     | 'connection_request'
@@ -107,9 +107,9 @@ export interface Sequence {
   approvalStatus?: 'approved' | 'pending';
   approvedBy?: string;
   approvedAt?: string;
-  enrolledLeadsCount: number;
-  createdAt: string;
-  updatedAt: string;
+  enrolledLeadsCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Task {

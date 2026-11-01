@@ -41,11 +41,11 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setLastName(leadToEdit.lastName);
       setCompany(leadToEdit.company);
       setJobTitle(leadToEdit.jobTitle);
-      setEmail(leadToEdit.email);
+      setEmail(leadToEdit.email || '');
       setPhone(leadToEdit.phone || '');
       setLinkedinUrl(leadToEdit.linkedinUrl);
       setSequenceId(leadToEdit.sequenceId || '');
-      setAssignedToId(leadToEdit.assignedToId);
+      setAssignedToId(leadToEdit.assignedToId || '');
       setNotes(leadToEdit.notes || '');
     } else {
       setFirstName('');
@@ -74,7 +74,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     const normMail = mail.toLowerCase().trim();
     const normLi = liUrl.toLowerCase().trim();
 
-    const existingMail = normMail ? leads.find((l) => l.email.toLowerCase() === normMail) : null;
+    const existingMail = normMail ? leads.find((l) => l.email && l.email.toLowerCase() === normMail) : null;
     if (existingMail) {
       setDuplicateWarning(`Decision 1 Flag: Lead with email "${normMail}" already exists (${existingMail.firstName} ${existingMail.lastName} at ${existingMail.company}). Opening this will update existing record.`);
       return;
@@ -336,9 +336,9 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
 
               {/* Email & LinkedIn */}
               <div className="space-y-1">
-                <label className="font-bold text-[#33475b]">
+                {/* <label className="font-bold text-[#33475b]">
                   Corporate Email <span className="text-rose-500">*</span>
-                </label>
+                </label> */}
                 <input
                   type="email"
                   required

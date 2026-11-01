@@ -112,7 +112,7 @@ export default function LeadsPage() {
           const q = searchQuery.toLowerCase().trim();
           const fullName = `${lead.firstName} ${lead.lastName}`.toLowerCase();
           const comp = lead.company.toLowerCase();
-          const em = lead.email.toLowerCase();
+          const em = (lead.email || '').toLowerCase();
           const job = lead.jobTitle.toLowerCase();
           if (!fullName.includes(q) && !comp.includes(q) && !em.includes(q) && !job.includes(q)) {
             return false;
@@ -587,7 +587,7 @@ export default function LeadsPage() {
                   </div>
                 </th>
 
-                <th className="px-4 py-3">Corporate Email</th>
+                {/* <th className="px-4 py-3">Corporate Email</th> */}
 
                 <th className="px-3 py-3 text-center">LinkedIn</th>
 
@@ -670,7 +670,7 @@ export default function LeadsPage() {
                             {lead.email}
                           </span>
                           <button
-                            onClick={() => handleCopyEmail(lead.email)}
+                            onClick={() => handleCopyEmail(lead.email || '')}
                             className="opacity-0 group-hover:opacity-100 p-0.5 text-[#7c98b6] hover:text-[#2d3e50] transition-opacity"
                             title="Copy email"
                           >

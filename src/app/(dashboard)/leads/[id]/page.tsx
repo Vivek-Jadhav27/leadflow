@@ -352,7 +352,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Decision Tree Interactive Journey Status Bar */}
-      <div className="rounded-lg border border-[#b2d5e5] bg-[#f0f9fb] p-4 text-xs">
+      {/* <div className="rounded-lg border border-[#b2d5e5] bg-[#f0f9fb] p-4 text-xs">
         <div className="flex items-center justify-between pb-2 border-b border-[#d0e5ef] mb-3">
           <div className="flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#0091ae] text-white font-bold text-[10px]">
@@ -371,9 +371,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </Link>
         </div>
 
-        {/* 5-Step Visual Journey Stepper */}
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
-          {/* Step 1: Duplicate Check */}
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Decision 1</p>
             <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Duplicate Check</p>
@@ -382,7 +380,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </span>
           </div>
 
-          {/* Step 2: LinkedIn Connection Gate */}
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Decision 2</p>
             <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Connection Gate</p>
@@ -399,7 +396,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </span>
           </div>
 
-          {/* Step 3: Sequence Cadence */}
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Decision 3</p>
             <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Approved Cadence</p>
@@ -408,7 +404,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </span>
           </div>
 
-          {/* Step 4: Outreach Tasks */}
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Outreach Execution</p>
             <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Daily LinkedIn Task</p>
@@ -423,7 +418,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </span>
           </div>
 
-          {/* Step 5: Final Outcome */}
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Outcome &amp; Reporting</p>
             <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Sales Outcome</p>
@@ -442,7 +436,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </span>
           </div>
         </div>
-      </div>
+      </div> */}
 
       {/* Main 3-Column HubSpot Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-xs">
@@ -556,7 +550,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </div>
 
           {/* SDR & Account Info */}
-          <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
+          {/* <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
             <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px] pb-2 border-b border-[#dfe3eb]">
               Account &amp; Assignment
             </h3>
@@ -582,7 +576,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
               )}
             </div>
-          </div>
+          </div> */}
         </div>
 
         {/* Center Column (2 spans): Sequence Cadence & Manual Message Actions */}
@@ -717,7 +711,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </div>
 
           {/* Enriched Intelligence Card */}
-          <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
+          {/* <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
             <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
               <div className="flex items-center gap-1.5">
                 <Sparkles className="h-4 w-4 text-amber-500" />
@@ -779,7 +773,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </Button>
               </div>
             )}
-          </div>
+          </div> */}
 
           {/* Activity Timeline (HubSpot-styled) */}
           <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">

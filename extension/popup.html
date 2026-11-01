@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LeadFlow</title>
+  <style>
+    :root {
+      --orange: #ff7a59;
+      --orange-dark: #e56342;
+      --navy: #2d3e50;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --green: #16a34a;
+      --green-bg: #dcfce7;
+      --red: #dc2626;
+      --red-bg: #fee2e2;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+
+    body { width: 340px; background: var(--bg); color: var(--text); font-size: 13px; }
+
+    /* ── Header ── */
+    .hdr {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 9px 14px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .brand { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; color: var(--navy); }
+    .brand-icon {
+      width: 20px; height: 20px; background: var(--orange); border-radius: 5px;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 10px;
+    }
+    .brand em { color: var(--orange); font-style: normal; }
+
+    .hdr-right { display: flex; align-items: center; gap: 6px; }
+    .pill {
+      font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+    }
+    .pill.on  { background: var(--green-bg); color: var(--green); }
+    .pill.off { background: #f1f5f9; color: var(--muted); }
+    .icon-btn {
+      background: none; border: none; cursor: pointer; color: var(--muted);
+      padding: 3px; border-radius: 4px; font-size: 14px; line-height: 1;
+      transition: background .15s;
+    }
+    .icon-btn:hover { background: #f1f5f9; color: var(--text); }
+
+    /* ── Settings drawer ── */
+    .settings {
+      display: none; background: #fff; border: 1px solid var(--border);
+      border-radius: 7px; padding: 10px 12px; margin: 10px 14px 0;
+    }
+    .settings.open { display: block; }
+    .settings label { font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; display: block; }
+    .settings input {
+      width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px;
+      font-size: 12px;
+    }
+    .settings-footer { display: flex; justify-content: flex-end; margin-top: 6px; }
+    .btn-sm {
+      padding: 3px 10px; background: var(--navy); color: #fff; border: none;
+      border-radius: 4px; font-size: 11px; cursor: pointer;
+    }
+
+    /* ── Body ── */
+    .body { padding: 12px 14px; }
+
+    /* Not-LinkedIn state */
+    .empty { text-align: center; padding: 28px 12px; }
+    .empty-icon { font-size: 28px; margin-bottom: 6px; }
+    .empty h3 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 4px; }
+    .empty p  { color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+    .btn-li {
+      display: inline-block; padding: 6px 14px; background: #0a66c2; color: #fff;
+      border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 11px;
+    }
+
+    /* ── Name card (no avatar) ── */
+    .name-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+      padding: 10px 12px; margin-bottom: 10px;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 1px 3px rgba(0,0,0,.04);
+    }
+    .name-card-info { min-width: 0; flex: 1; }
+    .name-card h3 { font-weight: 700; font-size: 13px; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .name-card p  { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+    .btn-refresh {
+      flex-shrink: 0; margin-left: 8px;
+      background: #f1f5f9; border: 1px solid var(--border); border-radius: 5px;
+      padding: 5px 9px; font-size: 11px; font-weight: 600; color: var(--muted);
+      cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 4px;
+    }
+    .btn-refresh:hover { background: var(--orange); border-color: var(--orange); color: #fff; }
+    .btn-refresh.spinning { animation: spin .6s linear infinite; pointer-events: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Dupe warning ── */
+    .dupe-warn {
+      display: none; background: #fef3c7; border: 1px solid #fde68a;
+      color: #92400e; padding: 6px 8px; border-radius: 6px;
+      font-size: 11px; margin-bottom: 8px;
+    }
+
+    /* ── Form ── */
+    .fg { margin-bottom: 9px; }
+    .fg label {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px;
+    }
+    .auto-tag { text-transform: none; font-weight: 500; color: var(--orange); font-size: 10px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+    input[type="text"], input[type="url"] {
+      width: 100%; padding: 7px 9px; border: 1px solid var(--border);
+      border-radius: 6px; font-size: 12px; color: var(--text); background: #fff;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 2px rgba(255,122,89,.15); }
+    input[readonly] { background: #f1f5f9; color: #475569; cursor: default; }
+
+    /* ── Submit ── */
+    .btn-add {
+      width: 100%; background: var(--orange); color: #fff; border: none;
+      padding: 9px; border-radius: 6px; font-weight: 600; font-size: 13px;
+      cursor: pointer; margin-top: 10px;
+      box-shadow: 0 2px 4px rgba(255,122,89,.25);
+      transition: background .15s;
+    }
+    .btn-add:hover:not(:disabled) { background: var(--orange-dark); }
+    .btn-add:disabled { background: #cbd5e1; cursor: not-allowed; box-shadow: none; }
+    .btn-add.saved { background: var(--green); }
+
+    /* ── Banner ── */
+    .banner { display: none; margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 11px; }
+    .banner.ok  { display: block; background: var(--green-bg); border: 1px solid #bbf7d0; color: #15803d; }
+    .banner.err { display: block; background: var(--red-bg);   border: 1px solid #fecaca; color: var(--red); }
+    .banner a { color: inherit; font-weight: 700; text-decoration: underline; margin-left: 4px; }
+
+    /* ── Footer ── */
+    .footer {
+      border-top: 1px solid var(--border); padding: 8px 14px; background: var(--surface);
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 11px; color: var(--muted);
+    }
+    .footer a { color: var(--orange); font-weight: 600; text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="hdr">
+  <div class="brand">
+    <div class="brand-icon">LF</div>
+    Lead<em>Flow</em>
+  </div>
+  <div class="hdr-right">
+    <span id="status-pill" class="pill off">Detecting…</span>
+    <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="settings">
+  <label>LeadFlow API Endpoint</label>
+  <input id="api-input" type="text" value="https://leadflow-nine-zeta.vercel.app" placeholder="https://leadflow-nine-zeta.vercel.app" />
+  <div class="settings-footer">
+    <button id="btn-save-settings" class="btn-sm">Save</button>
+  </div>
+</div>
+
+<!-- Body -->
+<div class="body">
+
+  <!-- Not on LinkedIn -->
+  <div id="view-empty" class="empty" style="display:none">
+    <div class="empty-icon">💼</div>
+    <h3>No LinkedIn Profile Open</h3>
+    <p>Navigate to any LinkedIn profile to capture this prospect into LeadFlow.</p>
+    <a href="https://www.linkedin.com" target="_blank" class="btn-li">Open LinkedIn</a>
+  </div>
+
+  <!-- Profile view -->
+  <div id="view-lead">
+    <!-- Name card + Refresh -->
+    <div class="name-card">
+      <div class="name-card-info">
+        <h3 id="card-name">Loading…</h3>
+        <p  id="card-sub">Fetching details…</p>
+      </div>
+      <button id="btn-refresh" class="btn-refresh" title="Re-fetch data from LinkedIn page">↻ Refresh</button>
+    </div>
+
+    <div id="dupe-warn" class="dupe-warn">
+      ⚠ This profile is already in LeadFlow. Saving again will update their record.
+    </div>
+
+    <form id="lead-form">
+      <div class="grid2">
+        <div class="fg">
+          <label>First Name <span class="auto-tag">Auto</span></label>
+          <input id="firstName" type="text" required />
+        </div>
+        <div class="fg">
+          <label>Last Name <span class="auto-tag">Auto</span></label>
+          <input id="lastName" type="text" />
+        </div>
+      </div>
+
+      <div class="fg">
+        <label>Position / Title <span class="auto-tag">Auto</span></label>
+        <input id="jobTitle" type="text" placeholder="e.g. CEO & Founder" required />
+      </div>
+
+      <div class="fg">
+        <label>Company Name <span class="auto-tag">Auto</span></label>
+        <input id="company" type="text" placeholder="e.g. KaashTech LLC" required />
+      </div>
+
+      <div class="fg">
+        <label>LinkedIn URL</label>
+        <input id="linkedinUrl" type="url" readonly />
+      </div>
+
+      <button type="submit" id="btn-add" class="btn-add">+ Add Lead to LeadFlow</button>
+    </form>
+
+    <div id="banner" class="banner"></div>
+  </div>
+
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  <span>LeadFlow Outbound CRM</span>
+  <a id="crm-link" href="http://localhost:3000/leads" target="_blank">Open Leads →</a>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

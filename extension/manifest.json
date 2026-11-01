@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "LeadFlow - LinkedIn Lead Clipper",
+  "version": "1.0.0",
+  "description": "Capture prospects from LinkedIn profiles with 1-click and sync directly to LeadFlow CRM",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.linkedin.com/*",
+    "https://leadflow-nine-zeta.vercel.app/*",
+    "https://*.vercel.app/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://*.leadflow.io/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LeadFlow Lead Clipper",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.linkedin.com/*"
+      ],
+      "js": [
+        "extractor.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

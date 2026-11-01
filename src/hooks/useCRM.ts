@@ -24,6 +24,37 @@ export function useCRM() {
     return unsubscribe;
   }, []);
 
+  // Synchronize incoming leads from Chrome Extension API
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncExtensionLeads = async () => {
+      try {
+        const res = await fetch('/api/leads');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.leads && Array.isArray(data.leads) && isMounted) {
+          const added = prototypeStore.syncIncomingLeads(data.leads);
+          if (added > 0) {
+            toast.success(`⚡ Synced ${added} new lead(s) from LinkedIn Clipper!`);
+          }
+        }
+      } catch {
+        // Silently ignore network errors when offline
+      }
+    };
+
+    syncExtensionLeads();
+    const interval = setInterval(syncExtensionLeads, 4000);
+    window.addEventListener('focus', syncExtensionLeads);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      window.removeEventListener('focus', syncExtensionLeads);
+    };
+  }, []);
+
   const leads = useMemo(() => prototypeStore.getLeads(), [prototypeStore]);
   const sequences = useMemo(() => prototypeStore.getSequences(), [prototypeStore]);
   const tasks = useMemo(() => prototypeStore.getTasks(), [prototypeStore]);
