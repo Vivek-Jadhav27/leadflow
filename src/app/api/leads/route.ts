@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
+import { authenticateServerRequest } from '@/lib/serverAuth';
 
 // CORS headers to permit Chrome Extension requests from any origin or chrome-extension://
 const corsHeaders = {
@@ -90,11 +91,40 @@ export async function GET(req: NextRequest) {
     firestoreLeads.forEach((l) => leadMap.set(l.id, l));
     const merged = Array.from(leadMap.values());
 
+    // Role-based Access Control:
+    // 1. SDR can see ONLY ASSIGNED LEADS
+    // 2. Admin can see ONLY their workspace leads (captured by admin or sdr members)
+    let finalLeads = merged;
+    try {
+      const authContext = await authenticateServerRequest(req);
+      if (authContext) {
+        if (authContext.role === 'sdr') {
+          const sdrUid = authContext.uid;
+          const sdrEmail = (authContext.email || '').toLowerCase().trim();
+          finalLeads = merged.filter((l) => {
+            return (
+              (l.assignedToId && l.assignedToId === sdrUid) ||
+              (l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === sdrEmail)
+            );
+          });
+        } else if (authContext.role === 'admin') {
+          const wsId = authContext.workspaceId || workspaceId;
+          if (wsId) {
+            finalLeads = merged.filter((l) => !l.workspaceId || l.workspaceId === wsId);
+          }
+        }
+      } else if (workspaceId) {
+        finalLeads = merged.filter((l) => !l.workspaceId || l.workspaceId === workspaceId);
+      }
+    } catch (authErr) {
+      console.warn('[API /leads GET] Auth check warning:', authErr);
+    }
+
     return NextResponse.json(
       {
         success: true,
-        count: merged.length,
-        leads: merged,
+        count: finalLeads.length,
+        leads: finalLeads,
       },
       {
         status: 200,
@@ -183,9 +213,9 @@ export async function POST(req: NextRequest) {
       notes: body.notes || 'Added to LeadFlow pipeline',
       capturedBy,
       capturedByUid,
-      assignedToId: body.assignedToId || null,
-      assignedToName: body.assignedToName || null,
-      assignedToEmail: body.assignedToEmail || null,
+      assignedToId: body.assignedToId || (capturedByUid ? capturedByUid : null),
+      assignedToName: body.assignedToName || (capturedBy ? capturedBy.split('@')[0] : null),
+      assignedToEmail: body.assignedToEmail || (capturedBy ? capturedBy : null),
       workspaceId: resolvedWorkspaceId || 'default_workspace',
       nextFollowUpDate: body.nextFollowUpDate || null,
       nextActionTitle: body.nextActionTitle || null,
@@ -243,9 +273,6 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    if (!body.id) {
-      return NextResponse.json({ error: 'Lead id is required' }, { status: 400, headers: corsHeaders });
-    }
 
     const isAdminReady =
       typeof isFirebaseAdminConfigured === 'function'
@@ -253,6 +280,52 @@ export async function PATCH(req: NextRequest) {
         : isFirebaseAdminConfigured;
 
     const now = new Date().toISOString();
+
+    // 1. Batch updates if body.leads array is provided
+    if (Array.isArray(body?.leads) && body.leads.length > 0) {
+      const itemsToUpdate = body.leads.filter((item: any) => item && item.id);
+
+      if (isAdminReady && adminDb) {
+        try {
+          const chunkSize = 400;
+          for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
+            const chunk = itemsToUpdate.slice(i, i + chunkSize);
+            const batch = adminDb.batch();
+            for (const item of chunk) {
+              const docRef = adminDb.collection('leads').doc(item.id);
+              batch.set(docRef, { ...item, updatedAt: now }, { merge: true });
+            }
+            await batch.commit();
+          }
+        } catch (fsErr) {
+          console.warn('[API /leads PATCH batch] Firestore update error:', fsErr);
+        }
+      }
+
+      // Update local storage backup
+      const currentLeads = getStoredLeads();
+      const updatesMap = new Map<string, any>();
+      itemsToUpdate.forEach((item: any) => updatesMap.set(item.id, item));
+
+      const updatedStored = currentLeads.map((lead) => {
+        if (updatesMap.has(lead.id)) {
+          return { ...lead, ...updatesMap.get(lead.id), updatedAt: now };
+        }
+        return lead;
+      });
+      saveStoredLeads(updatedStored);
+
+      return NextResponse.json(
+        { success: true, count: itemsToUpdate.length, message: 'Leads updated in Firestore' },
+        { status: 200, headers: corsHeaders }
+      );
+    }
+
+    // 2. Single lead update
+    if (!body.id) {
+      return NextResponse.json({ error: 'Lead id or leads array is required' }, { status: 400, headers: corsHeaders });
+    }
+
     const updates = { ...body, updatedAt: now };
 
     // Update in Firestore

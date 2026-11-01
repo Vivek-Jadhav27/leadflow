@@ -64,6 +64,16 @@ export function useCRM() {
             refreshAll();
           }
         }
+
+        // 3. Fetch SDR team members from Firestore
+        const teamRes = await fetch('/api/team');
+        if (teamRes.ok) {
+          const data = await teamRes.json();
+          if (data.team && Array.isArray(data.team) && isMounted) {
+            prototypeStore.syncIncomingTeam(data.team);
+            refreshAll();
+          }
+        }
       } catch {
         // Silently ignore network errors when offline
       }
@@ -181,6 +191,15 @@ export function useCRM() {
     const updated = prototypeStore.archiveLead(id, isArchived);
     if (updated) {
       refreshAll();
+      fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updated.id,
+          disposition: updated.disposition,
+          outcome: updated.outcome,
+        }),
+      }).catch((e) => console.warn('Firestore sync warning for archive lead', e));
       toast.success(isArchived ? 'Lead moved to archive' : 'Lead restored to active');
     }
     return updated;
@@ -190,6 +209,16 @@ export function useCRM() {
     const updated = prototypeStore.enrichLead(id, data);
     if (updated) {
       refreshAll();
+      fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updated.id,
+          enrichedData: updated.enrichedData,
+          disposition: updated.disposition,
+          phone: updated.phone,
+        }),
+      }).catch((e) => console.warn('Firestore sync warning for enrich lead', e));
       toast.success('Lead profile enriched with verified intelligence');
     }
     return updated;
@@ -199,6 +228,18 @@ export function useCRM() {
     const updated = prototypeStore.markReply(id, replyMessage, outcome);
     if (updated) {
       refreshAll();
+      fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updated.id,
+          outreachStatus: updated.outreachStatus,
+          disposition: updated.disposition,
+          outcome: updated.outcome,
+          nextFollowUpDate: null,
+          nextActionTitle: updated.nextActionTitle,
+        }),
+      }).catch((e) => console.warn('Firestore sync warning for mark reply', e));
       toast.success('Reply recorded. Automated sequence halted.');
     }
     return updated;
@@ -208,6 +249,20 @@ export function useCRM() {
     const updated = prototypeStore.advanceLeadStep(id);
     if (updated) {
       refreshAll();
+      fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updated.id,
+          currentStepNumber: updated.currentStepNumber,
+          connectionStatus: updated.connectionStatus,
+          outreachStatus: updated.outreachStatus,
+          disposition: updated.disposition,
+          nextFollowUpDate: updated.nextFollowUpDate || null,
+          nextActionTitle: updated.nextActionTitle || null,
+          activityHistory: updated.activityHistory || [],
+        }),
+      }).catch((e) => console.warn('Firestore sync warning for advance lead step', e));
       toast.success(`Advanced ${updated.firstName} to step ${updated.currentStepNumber}`);
     }
     return updated;
@@ -218,6 +273,23 @@ export function useCRM() {
       const updated = prototypeStore.assignSequenceToLead(leadId, sequenceId);
       if (updated) {
         refreshAll();
+        // Persist sequence assignment directly to Firebase Firestore
+        fetch('/api/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: leadId,
+            sequenceId: updated.sequenceId,
+            sequenceName: updated.sequenceName,
+            currentStepNumber: updated.currentStepNumber,
+            totalSteps: updated.totalSteps,
+            outreachStatus: updated.outreachStatus,
+            nextFollowUpDate: updated.nextFollowUpDate,
+            nextActionTitle: updated.nextActionTitle,
+            activityHistory: updated.activityHistory || [],
+          }),
+        }).catch((e) => console.warn('Firestore sequence assign error', e));
+
         if (sequenceId) {
           toast.success(`Enrolled ${updated.firstName} in ${updated.sequenceName}!`);
         } else {
@@ -233,7 +305,30 @@ export function useCRM() {
     (leadIds: string[], sequenceId: string | null) => {
       prototypeStore.bulkAssignSequence(leadIds, sequenceId);
       refreshAll();
-      toast.success(`${leadIds.length} lead(s) sequence updated!`);
+
+      const updatedLeads = prototypeStore
+        .getLeads()
+        .filter((l) => leadIds.includes(l.id))
+        .map((l) => ({
+          id: l.id,
+          sequenceId: l.sequenceId,
+          sequenceName: l.sequenceName,
+          currentStepNumber: l.currentStepNumber,
+          totalSteps: l.totalSteps,
+          outreachStatus: l.outreachStatus,
+          nextFollowUpDate: l.nextFollowUpDate,
+          nextActionTitle: l.nextActionTitle,
+        }));
+
+      if (updatedLeads.length > 0) {
+        fetch('/api/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leads: updatedLeads }),
+        }).catch((e) => console.warn('Firestore bulk sequence assign error', e));
+      }
+
+      toast.success(`${leadIds.length} lead(s) sequence saved to Cloud!`);
     },
     [refreshAll]
   );
@@ -241,7 +336,26 @@ export function useCRM() {
   const bulkAssign = useCallback((ids: string[], memberId: string) => {
     prototypeStore.bulkAssign(ids, memberId);
     refreshAll();
-    toast.success(`${ids.length} leads reassigned`);
+
+    const updatedLeads = prototypeStore
+      .getLeads()
+      .filter((l) => ids.includes(l.id))
+      .map((l) => ({
+        id: l.id,
+        assignedToId: l.assignedToId,
+        assignedToName: l.assignedToName,
+        assignedToEmail: l.assignedToEmail,
+      }));
+
+    if (updatedLeads.length > 0) {
+      fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads: updatedLeads }),
+      }).catch((e) => console.warn('Firestore bulk assign error', e));
+    }
+
+    toast.success(`${ids.length} leads reassigned in Cloud`);
   }, [refreshAll]);
 
   const bulkArchive = useCallback((ids: string[]) => {
@@ -462,6 +576,28 @@ export function useCRM() {
     [refreshAll]
   );
 
+  const addActivityEvent = useCallback(
+    (event: Omit<ActivityEvent, 'id'>) => {
+      const created = prototypeStore.addActivityEvent(event);
+      refreshAll();
+      if (event.leadId) {
+        const lead = prototypeStore.getLeadById(event.leadId);
+        if (lead) {
+          fetch('/api/leads', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: event.leadId,
+              activityHistory: lead.activityHistory || [created],
+            }),
+          }).catch((e) => console.warn('Activity history persist warning', e));
+        }
+      }
+      return created;
+    },
+    [refreshAll]
+  );
+
   return {
     leads,
     sequences,
@@ -472,6 +608,7 @@ export function useCRM() {
     stats,
     syncToFirestore,
     bulkCreateLeads,
+    addActivityEvent,
     // Actions
     createLead,
     updateLead,

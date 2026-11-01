@@ -23,8 +23,9 @@ import {
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
-import { Lead, LinkedInConnectionStatus } from '@/types/crm';
+import { Lead, LinkedInConnectionStatus, TeamMember } from '@/types/crm';
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { AddLeadDrawer } from '@/components/leads/AddLeadDrawer';
@@ -38,10 +39,13 @@ export default function LeadsPage() {
   const initialAction = searchParams.get('action');
   const initialFilter = searchParams.get('filter') || searchParams.get('status');
 
+  const { user, isAdmin, currentWorkspace } = useAuthContext();
+
   const {
     leads,
     sequences,
     team,
+    updateLead,
     deleteLead,
     archiveLead,
     bulkAssign,
@@ -50,6 +54,70 @@ export default function LeadsPage() {
     assignSequenceToLead,
     bulkAssignSequence,
   } = useCRM();
+
+  // Team members list strictly EXCLUDING admin/owner accounts per user requirement
+  const availableTeamMembers = useMemo(() => {
+    const list: TeamMember[] = [];
+    const seenIds = new Set<string>();
+
+    // Helper to check if role or name indicates admin
+    const isMemberAdmin = (roleStr?: string, nameStr?: string) => {
+      const r = (roleStr || '').toLowerCase();
+      const n = (nameStr || '').toLowerCase();
+      return r.includes('admin') || r.includes('owner') || n.includes('admin') || n.includes('owner');
+    };
+
+    // 1. Add all SDR team members from store (strictly excluding admins)
+    team.forEach((m) => {
+      if (!isMemberAdmin(m.role, m.name) && !seenIds.has(m.id)) {
+        seenIds.add(m.id);
+        list.push(m);
+      }
+    });
+
+    // 2. Discover SDRs assigned to or who captured leads
+    leads.forEach((l) => {
+      const sdrId = l.assignedToId || l.capturedByUid;
+      const sdrEmail = l.assignedToEmail || l.capturedBy || '';
+      const sdrName = l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : null);
+
+      if (sdrId && !seenIds.has(sdrId)) {
+        // Exclude if this matches the current admin user
+        if (user && (user.uid === sdrId || user.email === sdrEmail) && user.role === 'admin') {
+          return;
+        }
+        seenIds.add(sdrId);
+        list.push({
+          id: sdrId,
+          name: sdrName || sdrEmail.split('@')[0] || 'Outbound SDR',
+          email: sdrEmail,
+          role: 'Outbound SDR',
+          initials: (sdrName || sdrEmail || 'S').slice(0, 2).toUpperCase(),
+          status: 'active',
+          assignedLeadsCount: 0,
+          activeSequencesCount: 0,
+          completedTasksWeek: 0,
+        });
+      }
+    });
+
+    // 3. If currently logged in user is an SDR (not admin), ensure they are present
+    if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
+      list.push({
+        id: user.uid,
+        name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+        email: user.email || '',
+        role: 'Outbound SDR',
+        initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
+        status: 'active',
+        assignedLeadsCount: 0,
+        activeSequencesCount: 0,
+        completedTasksWeek: 0,
+      });
+    }
+
+    return list;
+  }, [team, leads, user]);
 
   // Drawers & Modals
   const [drawerOpen, setDrawerOpen] = useState(initialAction === 'new');
@@ -82,6 +150,22 @@ export default function LeadsPage() {
   const filteredLeads = useMemo(() => {
     return leads
       .filter((lead) => {
+        // Access Control:
+        // 1. SDR can see ONLY ASSIGNED LEADS
+        if (!isAdmin) {
+          const userEmailNorm = (user?.email || '').toLowerCase().trim();
+          const leadAssignedEmail = (lead.assignedToEmail || '').toLowerCase().trim();
+          const isAssigned =
+            (user?.uid && lead.assignedToId === user.uid) ||
+            (userEmailNorm && leadAssignedEmail && leadAssignedEmail === userEmailNorm);
+          if (!isAssigned) return false;
+        } else {
+          // 2. Admin can see ONLY their workspace leads (captured by admin or sdr members)
+          if (currentWorkspace?.workspaceId && lead.workspaceId && lead.workspaceId !== currentWorkspace.workspaceId) {
+            return false;
+          }
+        }
+
         // Active vs Archived
         if (viewArchived) {
           if (lead.disposition !== 'archived') return false;
@@ -350,7 +434,7 @@ export default function LeadsPage() {
 
         <div className="flex items-center gap-2">
           {/* Toggle Active vs Archived */}
-          <button
+          {/* <button
             onClick={() => {
               setViewArchived((v) => !v);
               setSelectedIds([]);
@@ -363,7 +447,7 @@ export default function LeadsPage() {
           >
             <Archive className="h-3.5 w-3.5" />
             <span>{viewArchived ? 'Viewing Archived' : 'Archive Filter'}</span>
-          </button>
+          </button> */}
 
           {/* Export CSV button */}
           <Button
@@ -469,7 +553,7 @@ export default function LeadsPage() {
               className="rounded-md border border-[#cbd8eb] bg-white px-2.5 py-1.5 text-xs text-[#33475b] focus:outline-none hidden md:block"
             >
               <option value="all">All Reps</option>
-              {team.map((m) => (
+              {availableTeamMembers.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
@@ -487,36 +571,38 @@ export default function LeadsPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setBulkAssignMenuOpen((v) => !v)}
-                className="h-7 text-xs bg-white text-[#33475b] gap-1"
-              >
-                <UserCheck className="h-3 w-3 text-[#7c98b6]" />
-                <span>Assign Owner</span>
-                <ChevronDown className="h-2.5 w-2.5" />
-              </Button>
+            {isAdmin && (
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setBulkAssignMenuOpen((v) => !v)}
+                  className="h-7 text-xs bg-white text-[#33475b] gap-1"
+                >
+                  <UserCheck className="h-3 w-3 text-[#7c98b6]" />
+                  <span>Assign Owner</span>
+                  <ChevronDown className="h-2.5 w-2.5" />
+                </Button>
 
-              {bulkAssignMenuOpen && (
-                <div className="absolute right-0 mt-1 w-44 rounded-md border border-[#dfe3eb] bg-white p-1 shadow-lg z-50">
-                  {team.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => {
-                        bulkAssign(selectedIds, m.id);
-                        setBulkAssignMenuOpen(false);
-                        setSelectedIds([]);
-                      }}
-                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] text-[#33475b] text-xs font-semibold"
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                {bulkAssignMenuOpen && (
+                  <div className="absolute right-0 mt-1 w-44 rounded-md border border-[#dfe3eb] bg-white p-1 shadow-lg z-50">
+                    {availableTeamMembers.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          bulkAssign(selectedIds, m.id);
+                          setBulkAssignMenuOpen(false);
+                          setSelectedIds([]);
+                        }}
+                        className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] text-[#33475b] text-xs font-semibold"
+                      >
+                        {m.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Bulk Enroll in Sequence */}
             <div className="relative">
@@ -563,7 +649,7 @@ export default function LeadsPage() {
               )}
             </div>
 
-            <Button
+            {/* <Button
               size="sm"
               variant="outline"
               onClick={() => {
@@ -574,7 +660,7 @@ export default function LeadsPage() {
             >
               <Archive className="h-3 w-3 text-[#7c98b6]" />
               <span>Archive</span>
-            </Button>
+            </Button> */}
 
             <Button
               size="sm"
@@ -833,10 +919,71 @@ export default function LeadsPage() {
                         {renderOutcomeBadge(lead)}
                       </td>
 
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="text-[#516f90] font-medium">
-                          {lead.assignedToName}
-                        </span>
+                      <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {isAdmin ? (
+                          <div className="relative inline-block text-left">
+                            <select
+                              value={lead.assignedToId || ''}
+                              onChange={(e) => {
+                                const newMemberId = e.target.value;
+                                if (!newMemberId) {
+                                  updateLead(lead.id, {
+                                    assignedToId: null,
+                                    assignedToName: null,
+                                    assignedToEmail: null,
+                                  });
+                                  toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
+                                } else {
+                                  const targetMember = availableTeamMembers.find((m) => m.id === newMemberId);
+                                  if (targetMember) {
+                                    updateLead(lead.id, {
+                                      assignedToId: targetMember.id,
+                                      assignedToName: targetMember.name,
+                                      assignedToEmail: targetMember.email,
+                                    });
+                                    toast.success(`Shifted ${lead.firstName} to ${targetMember.name}`);
+                                  }
+                                }
+                              }}
+                              className={`text-[11px] font-semibold rounded-md border px-2 py-1 pr-6 cursor-pointer transition-all focus:outline-none appearance-none bg-no-repeat bg-[right_6px_center] ${
+                                lead.assignedToName || lead.assignedToId
+                                  ? 'border-[#cbd8eb] bg-white text-[#33475b] hover:border-[#ff7a59]'
+                                  : 'border-dashed border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400'
+                              }`}
+                              style={{
+                                backgroundImage: `url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%237c98b6%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E")`,
+                              }}
+                              title="Click to shift / assign SDR"
+                            >
+                              <option value="">Unassigned (Assign SDR)</option>
+                              {lead.assignedToId && !availableTeamMembers.some((m) => m.id === lead.assignedToId) && (
+                                <option key={lead.assignedToId} value={lead.assignedToId}>
+                                  {lead.assignedToName || lead.assignedToEmail || 'Assigned SDR'} (SDR)
+                                </option>
+                              )}
+                              {availableTeamMembers.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.name} ({m.role || 'SDR'})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] ${
+                              lead.assignedToId === user?.uid
+                                ? 'font-bold text-[#ff7a59]'
+                                : 'font-medium text-[#516f90]'
+                            }`}
+                          >
+                            {lead.assignedToName || (lead.assignedToEmail ? lead.assignedToEmail.split('@')[0] : 'Unassigned')}
+                            {lead.assignedToId === user?.uid && (
+                              <span className="rounded bg-[#ff7a59]/10 px-1.5 py-0.2 text-[9px] font-bold text-[#ff7a59]">
+                                You
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">
@@ -881,7 +1028,7 @@ export default function LeadsPage() {
                             <Edit2 className="h-3.5 w-3.5" />
                           </Button>
 
-                          <Button
+                          {/* <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => archiveLead(lead.id, lead.disposition !== 'archived')}
@@ -889,7 +1036,7 @@ export default function LeadsPage() {
                             title={lead.disposition === 'archived' ? 'Restore Lead' : 'Archive Lead'}
                           >
                             <Archive className="h-3.5 w-3.5" />
-                          </Button>
+                          </Button> */}
 
                           <Button
                             variant="ghost"

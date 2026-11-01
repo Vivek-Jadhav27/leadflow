@@ -78,10 +78,25 @@ export function SDRDashboardView() {
     }).format(new Date());
   }, []);
 
+  const userEmailNorm = useMemo(() => (user?.email || '').toLowerCase().trim(), [user?.email]);
+
+  // SDR can see ONLY ASSIGNED LEADS
+  const assignedLeads = useMemo(() => {
+    return leads.filter((l) => {
+      const leadEmail = (l.assignedToEmail || '').toLowerCase().trim();
+      return (user?.uid && l.assignedToId === user.uid) || (userEmailNorm && leadEmail === userEmailNorm);
+    });
+  }, [leads, user?.uid, userEmailNorm]);
+
   // Map tasks to leads and enrich items for Today's Queue
   const todayItems = useMemo(() => {
-    // 1. Gather all tasks that are due today or overdue pending
+    // 1. Gather all tasks assigned to this SDR that are due today or overdue pending
     const relevantTasks = tasks.filter((t) => {
+      const isAssigned =
+        (user?.uid && t.assignedToId === user.uid) ||
+        assignedLeads.some((l) => l.id === t.leadId);
+      if (!isAssigned) return false;
+
       const isDueTodayOrOverdue = t.dueDate <= todayStr && t.status !== 'completed' && t.status !== 'skipped';
       const isCompletedToday = t.status === 'completed' && (t.completedAt?.startsWith(todayStr) || t.dueDate === todayStr);
       return isDueTodayOrOverdue || isCompletedToday;
@@ -103,7 +118,7 @@ export function SDRDashboardView() {
     const processedLeadIds = new Set<string>();
 
     for (const task of relevantTasks) {
-      let lead = leads.find((l) => l.id === task.leadId);
+      let lead = assignedLeads.find((l) => l.id === task.leadId);
       if (!lead) {
         // Fallback placeholder lead from task info
         lead = {
@@ -150,8 +165,8 @@ export function SDRDashboardView() {
       });
     }
 
-    // 2. Also surface any leads that have nextFollowUpDate === todayStr or followup_due but no task generated
-    leads.forEach((l) => {
+    // 2. Also surface any assigned leads that have nextFollowUpDate === todayStr or followup_due but no task generated
+    assignedLeads.forEach((l) => {
       if (l.disposition === 'archived') return;
       if (processedLeadIds.has(l.id)) return;
 

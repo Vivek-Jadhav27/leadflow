@@ -70,12 +70,17 @@ export interface Lead {
   outreachStatus: OutreachStatus;
   disposition: LeadOutcome;
   outcome?: string | null;
+  workspaceId?: string | null;
   assignedToId?: string | null;
   assignedToName?: string | null;
   assignedToEmail?: string | null;
+  capturedBy?: string | null;
+  capturedByUid?: string | null;
   nextFollowUpDate?: string | null; // YYYY-MM-DD
+  sequenceStartDate?: string | null;
   nextActionTitle?: string | null;
   notes?: string | null;
+  activityHistory?: ActivityEvent[];
   enrichedData?: EnrichedData;
   createdAt: string;
   updatedAt: string;

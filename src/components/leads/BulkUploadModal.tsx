@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { Sequence, TeamMember } from '@/types/crm';
 import { toast } from 'sonner';
 
@@ -42,6 +43,12 @@ export interface ParsedLeadRow {
 
 export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUploadModalProps) {
   const { bulkCreateLeads } = useCRM();
+  const { user, isAdmin } = useAuthContext();
+
+  const isSdr = !isAdmin && !!user;
+  const currentSdrName = user?.displayName || user?.email?.split('@')[0] || 'Outbound SDR';
+  const currentSdrEmail = user?.email || '';
+  const currentSdrId = user?.uid || 'sdr_current';
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -263,6 +270,10 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
     try {
       const selectedAssignee = team.find((t) => t.id === selectedAssigneeId);
 
+      const finalAssigneeId = isSdr ? currentSdrId : (selectedAssigneeId || null);
+      const finalAssigneeName = isSdr ? currentSdrName : (selectedAssignee?.name || null);
+      const finalAssigneeEmail = isSdr ? currentSdrEmail : (selectedAssignee?.email || null);
+
       const leadsPayload = allRows.map((r) => ({
         firstName: r.firstName.trim(),
         lastName: r.lastName.trim(),
@@ -272,15 +283,18 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         email: null,
         phone: null,
         sequenceId: selectedSequenceId || null,
-        assignedToId: selectedAssigneeId || null,
-        assignedToName: selectedAssignee?.name || null,
+        assignedToId: finalAssigneeId,
+        assignedToName: finalAssigneeName,
+        assignedToEmail: finalAssigneeEmail,
+        capturedBy: user?.email || 'bulk_csv_import',
+        capturedByUid: user?.uid || null,
         notes: 'Imported via CSV',
       }));
 
       await bulkCreateLeads(leadsPayload, {
         defaultSequenceId: selectedSequenceId || undefined,
-        defaultAssignedToId: selectedAssigneeId || undefined,
-        defaultAssignedToName: selectedAssignee?.name || undefined,
+        defaultAssignedToId: finalAssigneeId || undefined,
+        defaultAssignedToName: finalAssigneeName || undefined,
       });
 
       // Reset and close
@@ -616,20 +630,31 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
 
                 <div>
                   <label className="block text-xs font-bold text-[#33475b] mb-1">
-                    Assign SDR Representative (Optional)
+                    {isSdr ? 'Assigned Representative' : 'Assign SDR Representative (Optional)'}
                   </label>
-                  <select
-                    value={selectedAssigneeId}
-                    onChange={(e) => setSelectedAssigneeId(e.target.value)}
-                    className="w-full rounded-md border border-[#cbd8eb] bg-white px-3 py-1.5 text-xs text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
-                  >
-                    <option value="">Unassigned (Round Robin / Pool)</option>
-                    {team.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.role})
-                      </option>
-                    ))}
-                  </select>
+                  {isSdr ? (
+                    <div className="flex items-center gap-2 rounded-md border border-[#cbd8eb] bg-[#f5f8fa] px-3 py-1.5 text-xs text-[#33475b]">
+                      <User className="h-3.5 w-3.5 text-[#ff7a59]" />
+                      <span className="font-semibold">{currentSdrName}</span>
+                      <span className="text-[10px] text-slate-500">({currentSdrEmail})</span>
+                      <span className="ml-auto rounded bg-emerald-100 px-1.5 py-0.2 text-[9px] font-bold text-emerald-800">
+                        Auto-assigned to You
+                      </span>
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedAssigneeId}
+                      onChange={(e) => setSelectedAssigneeId(e.target.value)}
+                      className="w-full rounded-md border border-[#cbd8eb] bg-white px-3 py-1.5 text-xs text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
+                    >
+                      <option value="">Unassigned (Round Robin / Pool)</option>
+                      {team.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.role})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               </div>
             </div>

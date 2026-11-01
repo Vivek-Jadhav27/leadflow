@@ -33,22 +33,25 @@ import {
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { AddLeadDrawer } from '@/components/leads/AddLeadDrawer';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { formatDate } from '@/utils/date';
-import { EnrichedData, ConnectionStatus, LeadOutcome } from '@/types/crm';
+import { formatDate, formatDateTime } from '@/utils/date';
+import { EnrichedData, ConnectionStatus, LeadOutcome, ActivityEvent } from '@/types/crm';
 import { toast } from 'sonner';
 
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const { id } = resolvedParams;
   const router = useRouter();
+  const { user, isAdmin } = useAuthContext();
 
   const {
     leads,
     sequences,
+    settings,
     team,
     activities,
     updateLead,
@@ -58,11 +61,202 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     markReply,
     advanceLeadStep,
     assignSequenceToLead,
+    addActivityEvent,
   } = useCRM();
 
   const lead = leads.find((l) => l.id === id);
-  const leadActivities = activities.filter((a) => a.leadId === id);
+
+  // Combine stored lead activity history with global activity log
+  const leadActivities = React.useMemo(() => {
+    const map = new Map<string, ActivityEvent>();
+    if (lead?.activityHistory && Array.isArray(lead.activityHistory)) {
+      lead.activityHistory.forEach((a) => map.set(a.id, a));
+    }
+    activities.filter((a) => a.leadId === id).forEach((a) => map.set(a.id, a));
+
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [lead?.activityHistory, activities, id]);
+
   const sequence = lead?.sequenceId ? sequences.find((s) => s.id === lead.sequenceId) : null;
+
+  // Handle Admin changing sequence start date
+  const handleRescheduleStartDate = (newDate: string) => {
+    if (!lead || !newDate || newDate === lead.nextFollowUpDate) return;
+    const oldDate = lead.nextFollowUpDate || 'Immediate';
+
+    const updatedActivity: ActivityEvent = {
+      id: `act_${Date.now()}_resched`,
+      leadId: lead.id,
+      leadName: `${lead.firstName} ${lead.lastName}`,
+      type: 'sequence_rescheduled',
+      title: 'Cadence Start Date Changed',
+      description: `Admin updated cadence start date from ${oldDate} to ${newDate}. All subsequent cadence steps shifted accordingly.`,
+      actorName: user?.displayName || (user?.email ? user.email.split('@')[0] : 'Admin'),
+      timestamp: new Date().toISOString(),
+    };
+
+    const newActivityHistory = [updatedActivity, ...(lead.activityHistory || [])];
+
+    // Update lead in store and Firestore
+    updateLead(lead.id, {
+      nextFollowUpDate: newDate,
+      sequenceStartDate: newDate,
+      activityHistory: newActivityHistory,
+    });
+
+    // Also register in global activity log
+    addActivityEvent(updatedActivity);
+
+    toast.success(`Cadence schedule updated to start on ${newDate}`);
+  };
+
+  // SDR team members list strictly excluding admin/owner accounts
+  const availableTeamMembers = React.useMemo(() => {
+    const list: typeof team = [];
+    const seenIds = new Set<string>();
+
+    const isMemberAdmin = (roleStr?: string, nameStr?: string) => {
+      const r = (roleStr || '').toLowerCase();
+      const n = (nameStr || '').toLowerCase();
+      return r.includes('admin') || r.includes('owner') || n.includes('admin') || n.includes('owner');
+    };
+
+    team.forEach((m) => {
+      if (!isMemberAdmin(m.role, m.name) && !seenIds.has(m.id)) {
+        seenIds.add(m.id);
+        list.push(m);
+      }
+    });
+
+    leads.forEach((l) => {
+      const sdrId = l.assignedToId || l.capturedByUid;
+      const sdrEmail = l.assignedToEmail || l.capturedBy || '';
+      const sdrName = l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : null);
+
+      if (sdrId && !seenIds.has(sdrId)) {
+        if (user && (user.uid === sdrId || user.email === sdrEmail) && user.role === 'admin') {
+          return;
+        }
+        seenIds.add(sdrId);
+        list.push({
+          id: sdrId,
+          name: sdrName || sdrEmail.split('@')[0] || 'Outbound SDR',
+          email: sdrEmail,
+          role: 'Outbound SDR',
+          initials: (sdrName || sdrEmail || 'S').slice(0, 2).toUpperCase(),
+          status: 'active',
+          assignedLeadsCount: 0,
+          activeSequencesCount: 0,
+          completedTasksWeek: 0,
+        });
+      }
+    });
+
+    if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
+      list.push({
+        id: user.uid,
+        name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+        email: user.email || '',
+        role: 'Outbound SDR',
+        initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
+        status: 'active',
+        assignedLeadsCount: 0,
+        activeSequencesCount: 0,
+        completedTasksWeek: 0,
+      });
+    }
+
+    return list;
+  }, [team, leads, user]);
+
+  // Compute scheduled calendar dates for each step in the sequence
+  const stepScheduleMap = React.useMemo(() => {
+    if (!sequence || !sequence.steps || !lead) {
+      return new Map<number, { dateStr: string; formatted: string; isPast: boolean; isToday: boolean }>();
+    }
+
+    const map = new Map<number, { dateStr: string; formatted: string; isPast: boolean; isToday: boolean }>();
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const currentStep = lead.currentStepNumber || 1;
+    const currentStepDueDate = lead.nextFollowUpDate || todayStr;
+
+    // Helper to add days (respecting settings.skipWeekends if enabled)
+    const addDays = (baseDateStr: string, days: number): string => {
+      if (!days || days <= 0) return baseDateStr;
+      const d = new Date(baseDateStr + 'T00:00:00');
+      let added = 0;
+      while (added < days) {
+        d.setDate(d.getDate() + 1);
+        if (settings?.skipWeekends) {
+          const day = d.getDay();
+          if (day === 0 || day === 6) continue;
+        }
+        added++;
+      }
+      return d.toISOString().split('T')[0];
+    };
+
+    // Calculate dates backwards for steps before currentStep
+    let rollingDate = currentStepDueDate;
+    for (let s = currentStep; s >= 1; s--) {
+      const stepObj = sequence.steps.find((st) => st.stepNumber === s);
+      const isPast = s < currentStep;
+      const isToday = rollingDate === todayStr;
+
+      const d = new Date(rollingDate + 'T00:00:00');
+      const formatted = isNaN(d.getTime())
+        ? rollingDate
+        : d.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+
+      map.set(s, {
+        dateStr: rollingDate,
+        formatted,
+        isPast,
+        isToday,
+      });
+
+      if (s > 1) {
+        const delay = stepObj?.delayDays || 1;
+        const prevD = new Date(rollingDate + 'T00:00:00');
+        prevD.setDate(prevD.getDate() - delay);
+        rollingDate = prevD.toISOString().split('T')[0];
+      }
+    }
+
+    // Calculate dates forwards for steps after currentStep
+    rollingDate = currentStepDueDate;
+    const sortedSteps = [...sequence.steps].sort((a, b) => a.stepNumber - b.stepNumber);
+    for (const stepObj of sortedSteps) {
+      if (stepObj.stepNumber <= currentStep) continue;
+      const delay = stepObj.delayDays || 1;
+      rollingDate = addDays(rollingDate, delay);
+
+      const d = new Date(rollingDate + 'T00:00:00');
+      const formatted = isNaN(d.getTime())
+        ? rollingDate
+        : d.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+
+      map.set(stepObj.stepNumber, {
+        dateStr: rollingDate,
+        formatted,
+        isPast: false,
+        isToday: rollingDate === todayStr,
+      });
+    }
+
+    return map;
+  }, [sequence, lead, settings]);
 
   // Drawer / Modals state
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -80,14 +274,28 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [enrichTech, setEnrichTech] = useState(lead?.enrichedData?.techStack?.join(', ') || 'HubSpot, React, AWS, Postgres');
   const [enrichNotes, setEnrichNotes] = useState(lead?.enrichedData?.enrichmentNotes || 'Verified corporate contact. High fit for Q4 expansion.');
 
-  if (!lead) {
+  // Access Control: SDR can view ONLY assigned leads
+  const isUnauthorizedSdr =
+    !isAdmin &&
+    user &&
+    lead &&
+    lead.assignedToId !== user.uid &&
+    (!user.email || !lead.assignedToEmail || lead.assignedToEmail.toLowerCase().trim() !== user.email.toLowerCase().trim());
+
+  if (!lead || isUnauthorizedSdr) {
     return (
       <div className="py-16 text-center space-y-3">
-        <h3 className="text-base font-semibold text-[#33475b]">Lead Not Found</h3>
-        <p className="text-xs text-slate-500">The lead may have been deleted or is inaccessible.</p>
+        <h3 className="text-base font-semibold text-[#33475b]">
+          {isUnauthorizedSdr ? 'Access Restricted' : 'Lead Not Found'}
+        </h3>
+        <p className="text-xs text-slate-500">
+          {isUnauthorizedSdr
+            ? 'This lead is not assigned to you. SDR representatives can only access their assigned leads.'
+            : 'The lead may have been deleted or is inaccessible.'}
+        </p>
         <Link href={ROUTES.LEADS}>
           <Button variant="outline" size="sm" className="border-[#cbd6e2] text-[#33475b]">
-            Back to Leads
+            Back to Assigned Leads
           </Button>
         </Link>
       </div>
@@ -124,8 +332,60 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   };
 
   const handleSetConnectionStatus = (status: ConnectionStatus) => {
-    updateLead(lead.id, { connectionStatus: status });
-    toast.success(`LinkedIn connection updated to: ${status}`);
+    if (!lead) return;
+
+    let title = `LinkedIn Connection: ${status}`;
+    let desc = `Connection status updated to ${status}.`;
+
+    if (status === 'connected') {
+      title = 'LinkedIn Connection Accepted';
+      desc = `SDR manually confirmed connection acceptance for ${lead.firstName} ${lead.lastName}. Decision 2 Gate cleared.`;
+    } else if (status === 'pending' || status === 'request_sent') {
+      title = 'LinkedIn Connection Request Sent';
+      desc = `Connection request sent. Awaiting acceptance from prospect.`;
+    } else if (status === 'declined') {
+      title = 'LinkedIn Connection Declined';
+      desc = `Prospect declined connection request.`;
+    } else if (status === 'not_connected') {
+      title = 'LinkedIn Connection Unknown';
+      desc = `Connection status set to not connected.`;
+    }
+
+    const newAct: ActivityEvent = {
+      id: `act_${Date.now()}_conn`,
+      leadId: lead.id,
+      leadName: `${lead.firstName} ${lead.lastName}`,
+      type: status === 'connected' ? 'connection_accepted' : 'status_changed',
+      title,
+      description: desc,
+      actorName: user?.displayName || (user?.email ? user.email.split('@')[0] : 'SDR'),
+      timestamp: new Date().toISOString(),
+    };
+
+    const newActivityHistory = [newAct, ...(lead.activityHistory || [])];
+
+    updateLead(lead.id, {
+      connectionStatus: status,
+      activityHistory: newActivityHistory,
+    });
+
+    addActivityEvent(newAct);
+
+    toast.success(
+      status === 'connected'
+        ? `Marked as Accepted! Lead is now Connected.`
+        : `LinkedIn connection updated to: ${status}`
+    );
+  };
+
+  const handleAdvanceStep = () => {
+    if (!lead) return;
+    // Decision 2 gate check: If on Step 2 (Wait for Connection Acceptance) and connection not accepted yet
+    if (lead.currentStepNumber === 2 && lead.connectionStatus !== 'connected') {
+      toast.warning('Connection has not been accepted yet. Please confirm connection acceptance before sending value proposition messages.');
+      return;
+    }
+    advanceLeadStep(lead.id);
   };
 
   const handleSetOutcome = (outcome: LeadOutcome) => {
@@ -202,7 +462,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             <Button
               size="sm"
               variant="outline"
-              onClick={() => advanceLeadStep(lead.id)}
+              onClick={handleAdvanceStep}
               className="h-8 text-xs gap-1.5 border-[#0091ae] text-[#0091ae] hover:bg-[#f0f9fb] font-medium"
             >
               <Send className="h-3.5 w-3.5" />
@@ -233,7 +493,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </Button>
 
           {/* Archive / Restore */}
-          <Button
+          {/* <Button
             size="sm"
             variant="outline"
             onClick={() => archiveLead(lead.id, !isArchived)}
@@ -241,7 +501,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           >
             <Archive className="h-3.5 w-3.5 text-slate-400" />
             <span>{isArchived ? 'Restore' : 'Archive'}</span>
-          </Button>
+          </Button> */}
 
           {/* Delete */}
           <Button
@@ -281,7 +541,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   className={`inline-flex items-center gap-1 rounded px-2.5 py-0.5 text-xs font-semibold border ${
                     lead.connectionStatus === 'connected'
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : lead.connectionStatus === 'pending'
+                      : lead.connectionStatus === 'pending' || lead.connectionStatus === 'request_sent'
                       ? 'bg-amber-50 text-amber-700 border-amber-200'
                       : lead.connectionStatus === 'declined'
                       ? 'bg-rose-50 text-rose-700 border-rose-200'
@@ -290,12 +550,14 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 >
                   {lead.connectionStatus === 'connected' ? (
                     <CheckCircle2 className="h-3 w-3" />
-                  ) : lead.connectionStatus === 'pending' ? (
+                  ) : lead.connectionStatus === 'pending' || lead.connectionStatus === 'request_sent' ? (
                     <Clock className="h-3 w-3" />
                   ) : (
                     <AlertCircle className="h-3 w-3" />
                   )}
-                  <span className="capitalize">Connection: {lead.connectionStatus}</span>
+                  <span>
+                    Connection: {lead.connectionStatus === 'connected' ? 'Connected' : lead.connectionStatus === 'request_sent' ? 'Request Sent' : lead.connectionStatus === 'pending' ? 'Pending' : lead.connectionStatus}
+                  </span>
                 </span>
 
                 {/* Outcome Badge */}
@@ -462,37 +724,37 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 size="sm"
                 variant={lead.connectionStatus === 'connected' ? 'primary' : 'outline'}
                 onClick={() => handleSetConnectionStatus('connected')}
-                className={`h-8 text-xs font-semibold ${
+                className={`h-8 text-xs font-semibold cursor-pointer ${
                   lead.connectionStatus === 'connected'
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs ring-1 ring-emerald-500'
                     : 'border-[#cbd6e2] text-slate-700 hover:bg-[#f5f8fa]'
                 }`}
               >
-                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1 text-emerald-400" />
                 <span>Accepted</span>
               </Button>
 
               <Button
                 size="sm"
-                variant={lead.connectionStatus === 'pending' ? 'primary' : 'outline'}
-                onClick={() => handleSetConnectionStatus('pending')}
-                className={`h-8 text-xs font-semibold ${
-                  lead.connectionStatus === 'pending'
-                    ? 'bg-amber-600 text-white hover:bg-amber-700'
+                variant={lead.connectionStatus === 'pending' || lead.connectionStatus === 'request_sent' ? 'primary' : 'outline'}
+                onClick={() => handleSetConnectionStatus('request_sent')}
+                className={`h-8 text-xs font-semibold cursor-pointer ${
+                  lead.connectionStatus === 'pending' || lead.connectionStatus === 'request_sent'
+                    ? 'bg-amber-600 text-white hover:bg-amber-700 shadow-xs ring-1 ring-amber-500'
                     : 'border-[#cbd6e2] text-slate-700 hover:bg-[#f5f8fa]'
                 }`}
               >
                 <Clock className="h-3.5 w-3.5 mr-1" />
-                <span>Pending</span>
+                <span>Pending (Sent)</span>
               </Button>
 
               <Button
                 size="sm"
                 variant={lead.connectionStatus === 'declined' ? 'primary' : 'outline'}
                 onClick={() => handleSetConnectionStatus('declined')}
-                className={`h-8 text-xs font-semibold ${
+                className={`h-8 text-xs font-semibold cursor-pointer ${
                   lead.connectionStatus === 'declined'
-                    ? 'bg-rose-600 text-white hover:bg-rose-700'
+                    ? 'bg-rose-600 text-white hover:bg-rose-700 shadow-xs ring-1 ring-rose-500'
                     : 'border-[#cbd6e2] text-slate-700 hover:bg-[#f5f8fa]'
                 }`}
               >
@@ -502,11 +764,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
               <Button
                 size="sm"
-                variant={lead.connectionStatus === 'not_connected' ? 'primary' : 'outline'}
+                variant={lead.connectionStatus === 'not_connected' || lead.connectionStatus === 'not_started' ? 'primary' : 'outline'}
                 onClick={() => handleSetConnectionStatus('not_connected')}
-                className={`h-8 text-xs font-semibold ${
-                  lead.connectionStatus === 'not_connected'
-                    ? 'bg-slate-700 text-white'
+                className={`h-8 text-xs font-semibold cursor-pointer ${
+                  lead.connectionStatus === 'not_connected' || lead.connectionStatus === 'not_started'
+                    ? 'bg-slate-700 text-white shadow-xs'
                     : 'border-[#cbd6e2] text-slate-700 hover:bg-[#f5f8fa]'
                 }`}
               >
@@ -552,16 +814,67 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </div>
 
           {/* SDR & Account Info */}
-          {/* <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
-            <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px] pb-2 border-b border-[#dfe3eb]">
-              Account &amp; Assignment
-            </h3>
+          <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
+              <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px]">
+                Account &amp; Assignment
+              </h3>
+              {isAdmin && (
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
+                  Admin Manageable
+                </span>
+              )}
+            </div>
 
-            <div className="space-y-2 text-xs">
+            <div className="space-y-3 text-xs">
               <div>
-                <span className="text-[10px] uppercase font-semibold text-slate-400">Assigned Representative</span>
-                <p className="font-bold text-[#33475b] mt-0.5">{lead.assignedToName}</p>
-                <p className="text-[11px] text-slate-500">{lead.assignedToEmail}</p>
+                <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
+                  Assigned Representative (SDR)
+                </span>
+                {isAdmin ? (
+                  <select
+                    value={lead.assignedToId || ''}
+                    onChange={(e) => {
+                      const newId = e.target.value;
+                      if (!newId) {
+                        updateLead(lead.id, {
+                          assignedToId: null,
+                          assignedToName: null,
+                          assignedToEmail: null,
+                        });
+                        toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
+                      } else {
+                        const member = availableTeamMembers.find((m) => m.id === newId);
+                        if (member) {
+                          updateLead(lead.id, {
+                            assignedToId: member.id,
+                            assignedToName: member.name,
+                            assignedToEmail: member.email,
+                          });
+                          toast.success(`Shifted ${lead.firstName} to ${member.name}`);
+                        }
+                      }
+                    }}
+                    className="w-full rounded-md border border-[#cbd8eb] px-2.5 py-1.5 text-xs bg-white text-[#33475b] font-medium focus:border-[#ff7a59] focus:outline-none"
+                  >
+                    <option value="">Unassigned (Click to Assign)</option>
+                    {lead.assignedToId && !availableTeamMembers.some((m) => m.id === lead.assignedToId) && (
+                      <option key={lead.assignedToId} value={lead.assignedToId}>
+                        {lead.assignedToName || lead.assignedToEmail || 'Assigned SDR'} (SDR)
+                      </option>
+                    )}
+                    {availableTeamMembers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.role || 'SDR'})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div>
+                    <p className="font-bold text-[#33475b]">{lead.assignedToName || 'Unassigned'}</p>
+                    {lead.assignedToEmail && <p className="text-[11px] text-slate-500">{lead.assignedToEmail}</p>}
+                  </div>
+                )}
               </div>
 
               <div className="pt-2 border-t border-[#dfe3eb]">
@@ -578,7 +891,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
               )}
             </div>
-          </div> */}
+          </div>
         </div>
 
         {/* Center Column (2 spans): Sequence Cadence & Manual Message Actions */}
@@ -645,10 +958,27 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
 
                 <div className="p-2.5 rounded bg-[#f5f8fa] border border-[#dfe3eb]">
-                  <p className="text-[10px] uppercase font-bold text-slate-400">Due Date</p>
-                  <p className="font-bold text-[#33475b] mt-0.5">
-                    {lead.nextFollowUpDate || 'None'}
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Due / Start Date</p>
+                    {isAdmin && (
+                      <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200">
+                        Admin Manageable
+                      </span>
+                    )}
+                  </div>
+                  {isAdmin ? (
+                    <input
+                      type="date"
+                      value={lead.nextFollowUpDate || new Date().toISOString().split('T')[0]}
+                      onChange={(e) => handleRescheduleStartDate(e.target.value)}
+                      className="mt-1 w-full text-xs font-bold text-[#33475b] bg-white border border-[#cbd8eb] rounded px-2 py-1 focus:outline-none focus:border-[#ff7a59] cursor-pointer shadow-2xs"
+                      title="Admin: Click to change cadence schedule start date"
+                    />
+                  ) : (
+                    <p className="font-bold text-[#33475b] mt-0.5">
+                      {lead.nextFollowUpDate || 'None'}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -694,74 +1024,180 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
               ) : (
                 <div className="pt-2">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 pb-1 border-b border-[#dfe3eb]/60">
                     <p className="font-bold text-[#33475b]">
                       Cadence Steps ({lead.currentStepNumber} of {sequence.steps.length} completed)
                     </p>
-                    {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && (
-                      <Button
-                        size="sm"
-                        onClick={() => advanceLeadStep(lead.id)}
-                        className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold"
-                      >
-                        <Send className="h-3 w-3 mr-1" />
-                        <span>Send Next LinkedIn Step</span>
-                      </Button>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isAdmin && (
+                        <div className="flex items-center gap-1.5 bg-white border border-[#cbd8eb] rounded px-2 py-1 shadow-2xs text-xs">
+                          <Calendar className="h-3.5 w-3.5 text-[#ff7a59]" />
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Change Start:</span>
+                          <input
+                            type="date"
+                            value={lead.nextFollowUpDate || new Date().toISOString().split('T')[0]}
+                            onChange={(e) => handleRescheduleStartDate(e.target.value)}
+                            className="text-xs font-bold text-[#33475b] bg-transparent border-0 p-0 focus:outline-none cursor-pointer"
+                            title="Admin: Change start date for this lead's cadence"
+                          />
+                        </div>
+                      )}
+                      {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && (
+                        <Button
+                          size="sm"
+                          onClick={handleAdvanceStep}
+                          className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold"
+                        >
+                          <Send className="h-3 w-3 mr-1" />
+                          <span>Send Next LinkedIn Step</span>
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="space-y-2">
-                    {sequence.steps.map((st) => {
-                      const isCompleted = st.stepNumber < lead.currentStepNumber || lead.outreachStatus === 'completed';
-                      const isCurrent = st.stepNumber === lead.currentStepNumber && lead.outreachStatus !== 'completed';
+                  <div className="space-y-2.5">
+                    {sequence.steps
+                      .slice()
+                      .sort((a, b) => a.stepNumber - b.stepNumber)
+                      .map((st) => {
+                        const isCompleted = st.stepNumber < lead.currentStepNumber || lead.outreachStatus === 'completed';
+                        const isCurrent = st.stepNumber === lead.currentStepNumber && lead.outreachStatus !== 'completed';
+                        const sched = stepScheduleMap.get(st.stepNumber);
 
-                      return (
-                        <div
-                          key={st.id}
-                          className={`p-3 rounded border transition-colors ${
-                            isCurrent
-                              ? 'border-[#b2d5e5] bg-[#f0f9fb]'
-                              : isCompleted
-                              ? 'border-[#dfe3eb] bg-[#f5f8fa] text-slate-500'
-                              : 'border-[#dfe3eb] bg-white text-slate-400'
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                                isCompleted
-                                  ? 'bg-emerald-600 text-white'
-                                  : isCurrent
-                                  ? 'bg-[#ff7a59] text-white shadow-xs'
-                                  : 'bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              {isCompleted ? <Check className="h-3 w-3" /> : st.stepNumber}
-                            </div>
+                        const getActionExplanation = () => {
+                          switch (st.actionType) {
+                            case 'connection_request':
+                              return 'Send LinkedIn connection invite with personalized note';
+                            case 'wait_for_acceptance':
+                              return 'Monitor connection state until accepted (Decision 2 Gate)';
+                            case 'send_message':
+                              return 'Send value proposition outreach message on LinkedIn';
+                            case 'followup':
+                              return 'Send follow-up nudge or case study proof';
+                            case 'complete_details':
+                              return 'Review prospect reply & complete lead outcome evaluation';
+                            case 'wait_delay':
+                              return `Wait ${st.delayDays} day(s) before sending next outreach`;
+                            default:
+                              return st.title;
+                          }
+                        };
 
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center justify-between">
-                                <span className="font-bold text-[#33475b] text-xs">
-                                  {st.title}
-                                </span>
-                                <span className="text-[10px] text-slate-400">
-                                  {st.delayDays === 0 ? 'Immediately' : `+${st.delayDays}d delay`}
-                                </span>
+                        return (
+                          <div
+                            key={st.id || st.stepNumber}
+                            className={`p-3.5 rounded-lg border transition-all ${
+                              isCurrent
+                                ? 'border-[#ff7a59]/60 bg-[#fffdfd] shadow-xs ring-1 ring-[#ff7a59]/20'
+                                : isCompleted
+                                ? 'border-[#dfe3eb] bg-[#f8fafc] text-slate-500'
+                                : 'border-[#dfe3eb] bg-white text-slate-400'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              {/* Step Number / Completed Badge */}
+                              <div
+                                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                                  isCompleted
+                                    ? 'bg-emerald-600 text-white'
+                                    : isCurrent
+                                    ? 'bg-[#ff7a59] text-white shadow-xs'
+                                    : 'bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                {isCompleted ? <Check className="h-3.5 w-3.5" /> : st.stepNumber}
                               </div>
 
-                              {st.messageTemplate && (
-                                <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
-                                  <p className="font-mono text-[10px] text-slate-500 mb-0.5">Template:</p>
-                                  {st.messageTemplate
-                                    .replace('{{firstName}}', lead.firstName)
-                                    .replace('{{company}}', lead.company)}
+                              <div className="min-w-0 flex-1 space-y-1.5">
+                                {/* Title & Date Pill */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`font-bold text-xs ${isCurrent ? 'text-[#33475b]' : isCompleted ? 'text-slate-700' : 'text-slate-500'}`}>
+                                      {st.title}
+                                    </span>
+                                  </div>
+
+                                  {/* Scheduled Date Badge */}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {isCompleted ? (
+                                      <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+                                        <Check className="h-3 w-3 text-emerald-600" />
+                                        <span>Completed: {sched?.formatted || 'Done'}</span>
+                                      </span>
+                                    ) : isCurrent ? (
+                                      <span className="inline-flex items-center gap-1 rounded bg-[#fff0eb] px-2 py-0.5 text-[11px] font-bold text-[#e06545] border border-[#ff7a59]/40 shadow-2xs">
+                                        <Clock className="h-3 w-3 text-[#ff7a59] animate-pulse" />
+                                        <span>{sched?.isToday ? 'Today · ' : 'Due '}{sched?.formatted}</span>
+                                        <span className="text-[10px] text-[#ff7a59]/80 font-normal">
+                                          ({st.delayDays === 0 ? 'Immediate' : `+${st.delayDays}d`})
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 rounded bg-[#f5f8fa] px-2 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200">
+                                        <Calendar className="h-3 w-3 text-slate-400" />
+                                        <span>Scheduled: {sched?.formatted}</span>
+                                        <span className="text-[10px] text-slate-400 font-normal">
+                                          ({st.delayDays === 0 ? 'Immediate' : `+${st.delayDays}d delay`})
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
-                              )}
+
+                                {/* Scheduled Action Description */}
+                                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                  <span className="font-semibold text-slate-600">Action:</span>
+                                  <span className={isCurrent ? 'text-slate-700 font-medium' : ''}>
+                                    {getActionExplanation()}
+                                  </span>
+                                </div>
+
+                                {/* Decision 2 Connection Gate Manual Confirmation on Step 2 */}
+                                {isCurrent && st.stepNumber === 2 && (
+                                  <div className="mt-2 p-2 rounded-md border border-[#dfe3eb] text-xs">
+                                    {lead.connectionStatus === 'connected' ? (
+                                      <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50/80 p-1.5 rounded">
+                                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                                        <div>
+                                          <span className="font-bold">Connection Accepted!</span>
+                                          <span className="text-slate-600 ml-1">Decision 2 Gate cleared. You can now advance to Step 3.</span>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-50/80 p-1.5 rounded border border-amber-200/60">
+                                        <div className="flex items-center gap-2 text-amber-900">
+                                          <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                                          <span>
+                                            Connection request is <strong>Sent / Pending</strong>. When prospect accepts on LinkedIn, confirm below:
+                                          </span>
+                                        </div>
+                                        <Button
+                                          size="sm"
+                                          onClick={() => handleSetConnectionStatus('connected')}
+                                          className="h-6 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs shrink-0 cursor-pointer"
+                                        >
+                                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                                          <span>Mark Accepted</span>
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Template (if applicable) */}
+                                {st.messageTemplate && (
+                                  <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
+                                    <p className="font-mono text-[10px] text-slate-500 mb-0.5">Template:</p>
+                                    {st.messageTemplate
+                                      .replace('{{firstName}}', lead.firstName)
+                                      .replace('{{company}}', lead.company)}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
                 </div>
               )}
@@ -854,7 +1290,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     <div>
                       <div className="flex items-baseline justify-between text-xs">
                         <span className="font-bold text-[#33475b]">{act.title}</span>
-                        <span className="text-[10px] text-slate-400">{formatDate(act.timestamp)}</span>
+                        <span className="text-[10px] text-slate-400 font-medium">{formatDateTime(act.timestamp)}</span>
                       </div>
                       <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
                         {act.description}

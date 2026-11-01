@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, Users, GitBranch, CheckSquare, X, ArrowRight } from 'lucide-react';
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
 
 interface GlobalSearchModalProps {
@@ -15,6 +16,7 @@ interface GlobalSearchModalProps {
 export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
   const [query, setQuery] = useState('');
   const { leads, sequences, tasks } = useCRM();
+  const { user, isAdmin } = useAuthContext();
   const router = useRouter();
 
   useEffect(() => {
@@ -38,13 +40,23 @@ export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
   const q = query.toLowerCase().trim();
 
   const matchingLeads = q
-    ? leads.filter(
-        (l) =>
-          `${l.firstName} ${l.lastName}`.toLowerCase().includes(q) ||
-          l.company.toLowerCase().includes(q) ||
-          (l.email ? l.email.toLowerCase().includes(q) : false) ||
-          l.jobTitle.toLowerCase().includes(q)
-      ).slice(0, 5)
+    ? leads
+        .filter((l) => {
+          if (!isAdmin) {
+            const userEmailNorm = (user?.email || '').toLowerCase().trim();
+            const isAssigned =
+              (user?.uid && l.assignedToId === user.uid) ||
+              (userEmailNorm && l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === userEmailNorm);
+            if (!isAssigned) return false;
+          }
+          return (
+            `${l.firstName} ${l.lastName}`.toLowerCase().includes(q) ||
+            l.company.toLowerCase().includes(q) ||
+            (l.email ? l.email.toLowerCase().includes(q) : false) ||
+            l.jobTitle.toLowerCase().includes(q)
+          );
+        })
+        .slice(0, 5)
     : [];
 
   const matchingSequences = q

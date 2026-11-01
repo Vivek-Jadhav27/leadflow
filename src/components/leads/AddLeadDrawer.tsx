@@ -5,6 +5,7 @@ import { X, AlertCircle, Sparkles, Globe } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 import { Lead } from '@/types/crm';
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { Button } from '@/components/ui/button';
 
 interface AddLeadDrawerProps {
@@ -14,7 +15,13 @@ interface AddLeadDrawerProps {
 }
 
 export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProps) {
-  const { leads, sequences, createLead, updateLead } = useCRM();
+  const { leads, sequences, team, createLead, updateLead } = useCRM();
+  const { user, isAdmin } = useAuthContext();
+
+  const isSdr = !isAdmin && !!user;
+  const currentSdrName = user?.displayName || user?.email?.split('@')[0] || 'Outbound SDR';
+  const currentSdrEmail = user?.email || '';
+  const currentSdrId = user?.uid || 'sdr_current';
 
   const [activeTab, setActiveTab] = useState<'manual' | 'extension'>('manual');
 
@@ -26,10 +33,19 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
   const [jobTitle, setJobTitle] = useState(leadToEdit?.jobTitle || '');
   const [linkedinUrl, setLinkedinUrl] = useState(leadToEdit?.linkedinUrl || '');
   const [sequenceId, setSequenceId] = useState(leadToEdit?.sequenceId || '');
+  const [assignedToId, setAssignedToId] = useState(leadToEdit?.assignedToId || (isSdr ? currentSdrId : ''));
 
   // Errors & Duplicate warning
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+
+  const sdrTeam = React.useMemo(() => {
+    return team.filter((m) => {
+      const r = (m.role || '').toLowerCase();
+      const n = (m.name || '').toLowerCase();
+      return !r.includes('admin') && !r.includes('owner') && !n.includes('admin') && !n.includes('owner');
+    });
+  }, [team]);
 
   // Sync state if leadToEdit changes
   React.useEffect(() => {
@@ -40,6 +56,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setJobTitle(leadToEdit.jobTitle);
       setLinkedinUrl(leadToEdit.linkedinUrl);
       setSequenceId(leadToEdit.sequenceId || '');
+      setAssignedToId(leadToEdit.assignedToId || '');
     } else {
       setFirstName('');
       setLastName('');
@@ -47,10 +64,11 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setJobTitle('');
       setLinkedinUrl('');
       setSequenceId('');
+      setAssignedToId(isSdr ? currentSdrId : '');
     }
     setErrors({});
     setDuplicateWarning(null);
-  }, [leadToEdit, isOpen]);
+  }, [leadToEdit, isOpen, isSdr, currentSdrId]);
 
   if (!isOpen) return null;
 
@@ -91,6 +109,10 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     if (!validate()) return;
 
     const selectedSeq = sequenceId ? sequences.find((s) => s.id === sequenceId) : null;
+    const finalAssigneeId = isSdr ? currentSdrId : (assignedToId || null);
+    const selectedMember = team.find((m) => m.id === finalAssigneeId);
+    const finalAssigneeName = isSdr ? currentSdrName : (selectedMember?.name || null);
+    const finalAssigneeEmail = isSdr ? currentSdrEmail : (selectedMember?.email || null);
 
     if (leadToEdit) {
       updateLead(leadToEdit.id, {
@@ -101,6 +123,9 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         linkedinUrl: linkedinUrl.trim(),
         sequenceId: sequenceId || null,
         sequenceName: selectedSeq?.name || null,
+        assignedToId: finalAssigneeId,
+        assignedToName: finalAssigneeName,
+        assignedToEmail: finalAssigneeEmail,
         outreachStatus: sequenceId
           ? (leadToEdit.outreachStatus === 'unassigned' ? 'in_sequence' : leadToEdit.outreachStatus)
           : (leadToEdit.outreachStatus === 'in_sequence' ? 'unassigned' : leadToEdit.outreachStatus),
@@ -121,6 +146,9 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         connectionStatus: 'not_started',
         outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
         disposition: 'active',
+        assignedToId: finalAssigneeId,
+        assignedToName: finalAssigneeName,
+        assignedToEmail: finalAssigneeEmail,
       });
     }
 
@@ -332,6 +360,42 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                 <p className="text-[10px] text-slate-500">
                   Enrolling the lead immediately creates Step 1 outreach tasks in today&apos;s queue.
                 </p>
+              </div>
+
+              {/* SDR Representative Assignment */}
+              <div className="space-y-1">
+                <label className="font-bold text-[#33475b] flex items-center justify-between">
+                  <span>Assigned SDR Representative</span>
+                  {isSdr && (
+                    <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-200">
+                      Auto-assigned to You
+                    </span>
+                  )}
+                </label>
+                {isSdr ? (
+                  <div className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-[#f5f8fa] text-[#33475b] font-medium flex items-center gap-2">
+                    <span>{currentSdrName}</span>
+                    <span className="text-[10px] text-slate-400">({currentSdrEmail})</span>
+                  </div>
+                ) : (
+                  <select
+                    value={assignedToId}
+                    onChange={(e) => setAssignedToId(e.target.value)}
+                    className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
+                  >
+                    <option value="">Unassigned (Round Robin / Pool)</option>
+                    {leadToEdit?.assignedToId && !sdrTeam.some((m) => m.id === leadToEdit.assignedToId) && (
+                      <option value={leadToEdit.assignedToId}>
+                        {leadToEdit.assignedToName || leadToEdit.assignedToEmail || 'Assigned SDR'} (SDR)
+                      </option>
+                    )}
+                    {sdrTeam.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.role || 'SDR'})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </form>
           )}

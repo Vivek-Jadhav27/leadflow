@@ -24,6 +24,7 @@ import {
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
 import { useCRM } from '@/hooks/useCRM';
+import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { Task } from '@/types/crm';
@@ -33,6 +34,7 @@ import { toast } from 'sonner';
 export default function TasksPage() {
   const searchParams = useSearchParams();
   const initialFilter = searchParams.get('filter') || 'today';
+  const { user, isAdmin } = useAuthContext();
 
   const {
     tasks,
@@ -61,6 +63,20 @@ export default function TasksPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
   const filteredTasks = tasks.filter((t) => {
+    // Role-based Access Control: SDR can see ONLY their assigned tasks
+    if (!isAdmin) {
+      const userEmailNorm = (user?.email || '').toLowerCase().trim();
+      const isAssigned =
+        (user?.uid && t.assignedToId === user.uid) ||
+        leads.some(
+          (l) =>
+            l.id === t.leadId &&
+            ((user?.uid && l.assignedToId === user.uid) ||
+              (userEmailNorm && l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === userEmailNorm))
+        );
+      if (!isAssigned) return false;
+    }
+
     if (activeFilter === 'today') {
       return t.status !== 'completed' && t.status !== 'skipped' && t.dueDate === todayStr;
     }

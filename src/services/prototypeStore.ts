@@ -195,7 +195,7 @@ class PrototypeStore {
 
   public syncIncomingLeads(incoming: any[]): number {
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
-    let addedCount = 0;
+    let modifiedCount = 0;
 
     const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
 
@@ -203,40 +203,118 @@ class PrototypeStore {
       if (!item.id || this.deletedLeadIds.has(item.id)) continue;
       const itemUrl = normUrl(item.linkedinUrl);
 
-      const exists = this.db.leads.some(
+      const existingIndex = this.db.leads.findIndex(
         (l) => l.id === item.id || (itemUrl && normUrl(l.linkedinUrl) === itemUrl)
       );
 
-      if (!exists) {
-        this.db.leads.push({
-          id: item.id,
-          firstName: item.firstName || '',
-          lastName: item.lastName || '',
-          company: item.company || '',
-          jobTitle: item.jobTitle || 'Prospect',
-          email: item.email || null,
-          phone: item.phone || null,
-          linkedinUrl: item.linkedinUrl || '',
-          channel: 'linkedin',
-          sequenceId: item.sequenceId || null,
-          sequenceName: item.sequenceName || (item.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
-          currentStepNumber: item.currentStepNumber || 0,
-          totalSteps: item.totalSteps || 4,
-          connectionStatus: item.connectionStatus || 'not_started',
-          outreachStatus: item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned'),
-          disposition: item.disposition || 'active',
-          notes: item.notes || null,
-          createdAt: item.createdAt || new Date().toISOString(),
-          updatedAt: item.updatedAt || new Date().toISOString(),
+      // Preserve or initialize activity history
+      let activityHistory: ActivityEvent[] = Array.isArray(item.activityHistory) && item.activityHistory.length > 0
+        ? [...item.activityHistory]
+        : [];
+
+      if (activityHistory.length === 0) {
+        // Build initial chronological history so that existing leads never show Activity History (0)
+        activityHistory.push({
+          id: `act_${item.id}_create`,
+          leadId: item.id,
+          leadName: `${item.firstName} ${item.lastName}`,
+          type: 'lead_created',
+          title: 'Lead Captured',
+          description: `${item.firstName} ${item.lastName} from ${item.company} captured and verified.`,
+          actorName: item.assignedToName || (item.capturedBy ? item.capturedBy.split('@')[0] : 'Workspace Member'),
+          timestamp: item.createdAt || new Date().toISOString(),
         });
-        addedCount++;
+
+        if (item.assignedToName) {
+          activityHistory.push({
+            id: `act_${item.id}_assign`,
+            leadId: item.id,
+            leadName: `${item.firstName} ${item.lastName}`,
+            type: 'lead_assigned',
+            title: 'Lead Assigned to Representative',
+            description: `Lead assigned to ${item.assignedToName} (${item.assignedToEmail || 'Outbound SDR'}).`,
+            actorName: item.assignedToName || 'System',
+            timestamp: item.createdAt || new Date().toISOString(),
+          });
+        }
+
+        if (item.sequenceName || item.sequenceId) {
+          activityHistory.push({
+            id: `act_${item.id}_seq`,
+            leadId: item.id,
+            leadName: `${item.firstName} ${item.lastName}`,
+            type: 'sequence_assigned',
+            title: 'Outreach Sequence Enrolled',
+            description: `Enrolled in ${item.sequenceName || 'LinkedIn Outreach Cadence'}. Initial step scheduled.`,
+            actorName: item.assignedToName || 'System',
+            timestamp: item.createdAt || new Date().toISOString(),
+          });
+        }
+      }
+
+      // Merge into global activities collection
+      for (const act of activityHistory) {
+        if (!this.db.activities.some((a) => a.id === act.id)) {
+          this.db.activities.unshift(act);
+        }
+      }
+
+      const leadRecord: Lead = {
+        id: item.id,
+        firstName: item.firstName || '',
+        lastName: item.lastName || '',
+        company: item.company || '',
+        jobTitle: item.jobTitle || 'Prospect',
+        email: item.email || null,
+        phone: item.phone || null,
+        linkedinUrl: item.linkedinUrl || '',
+        channel: 'linkedin',
+        sequenceId: item.sequenceId || null,
+        sequenceName: item.sequenceName || (item.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
+        currentStepNumber: item.currentStepNumber || 0,
+        totalSteps: item.totalSteps || 4,
+        connectionStatus: item.connectionStatus || 'not_started',
+        outreachStatus: item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned'),
+        disposition: item.disposition || 'active',
+        outcome: item.outcome || null,
+        workspaceId: item.workspaceId || null,
+        assignedToId: item.assignedToId || null,
+        assignedToName: item.assignedToName || null,
+        assignedToEmail: item.assignedToEmail || null,
+        capturedBy: item.capturedBy || null,
+        capturedByUid: item.capturedByUid || null,
+        nextFollowUpDate: item.nextFollowUpDate || null,
+        sequenceStartDate: item.sequenceStartDate || item.nextFollowUpDate || null,
+        nextActionTitle: item.nextActionTitle || null,
+        notes: item.notes || null,
+        activityHistory,
+        enrichedData: item.enrichedData || undefined,
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt || new Date().toISOString(),
+      };
+
+      if (existingIndex === -1) {
+        this.db.leads.push(leadRecord);
+        modifiedCount++;
+      } else {
+        this.db.leads[existingIndex] = {
+          ...this.db.leads[existingIndex],
+          ...leadRecord,
+        };
+        modifiedCount++;
       }
     }
 
-    if (addedCount > 0) {
+    if (modifiedCount > 0) {
       this.persistAndNotify();
     }
-    return addedCount;
+    return modifiedCount;
+  }
+
+  public syncIncomingTeam(incoming: TeamMember[]): void {
+    if (!Array.isArray(incoming)) return;
+    this.db.team = incoming;
+    this.persistAndNotify();
   }
 
   public syncIncomingSequences(incoming: Sequence[]): number {
@@ -434,7 +512,8 @@ class PrototypeStore {
     let newOutreachStatus = lead.outreachStatus;
 
     if (nextStepNum === 2) {
-      newConnStatus = 'connected';
+      newConnStatus = 'request_sent';
+      newOutreachStatus = 'in_sequence';
     } else if (nextStepNum === 3) {
       newOutreachStatus = 'message_sent';
     } else if (nextStepNum >= 4) {
@@ -449,11 +528,15 @@ class PrototypeStore {
       nextActionTitle: step?.title,
     });
 
+    const isStep1Dispatched = nextStepNum === 2;
     this.addActivityEvent({
       leadId: id,
-      type: 'followup_scheduled',
-      title: `Advanced to Step ${nextStepNum}: ${step?.title}`,
-      description: `Action completed. Next follow-up scheduled for ${dueDate}.`,
+      leadName: `${lead.firstName} ${lead.lastName}`,
+      type: isStep1Dispatched ? 'connection_request_sent' : 'followup_scheduled',
+      title: isStep1Dispatched ? 'LinkedIn Connection Request Sent' : `Advanced to Step ${nextStepNum}: ${step?.title}`,
+      description: isStep1Dispatched
+        ? `Step 1 connection invite sent to ${lead.firstName} ${lead.lastName}. Status updated to Request Sent. Awaiting prospect acceptance (Decision 2 Gate).`
+        : `Action completed. Next follow-up scheduled for ${dueDate}.`,
       actorName: 'Workspace Member',
       timestamp: now,
     });
@@ -765,6 +848,18 @@ class PrototypeStore {
       id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     };
     this.db.activities.unshift(newEvent);
+
+    // Also attach to the lead's activityHistory
+    if (event.leadId) {
+      const lead = this.db.leads.find((l) => l.id === event.leadId);
+      if (lead) {
+        if (!lead.activityHistory) {
+          lead.activityHistory = [];
+        }
+        lead.activityHistory.unshift(newEvent);
+      }
+    }
+
     this.persistAndNotify();
     return newEvent;
   }

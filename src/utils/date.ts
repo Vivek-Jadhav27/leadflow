@@ -16,6 +16,24 @@ export function formatDate(dateString: string | undefined): string {
   }
 }
 
+export function formatDateTime(dateString: string | undefined): string {
+  if (!dateString) return 'N/A';
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(date);
+  } catch {
+    return dateString;
+  }
+}
+
 /**
  * Returns today's date in YYYY-MM-DD format based on local midnight.
  */
