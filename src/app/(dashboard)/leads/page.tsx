@@ -18,6 +18,7 @@ import {
   Eye,
   RotateCcw,
   Sparkles,
+  GitBranch,
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
@@ -44,6 +45,8 @@ export default function LeadsPage() {
     bulkAssign,
     bulkArchive,
     bulkDelete,
+    assignSequenceToLead,
+    bulkAssignSequence,
   } = useCRM();
 
   // Drawers & Modals
@@ -51,6 +54,8 @@ export default function LeadsPage() {
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [bulkSequenceMenuOpen, setBulkSequenceMenuOpen] = useState(false);
+  const [assigningSequenceLeadId, setAssigningSequenceLeadId] = useState<string | null>(null);
 
   // Filters state
   const [searchQuery, setSearchQuery] = useState('');
@@ -498,6 +503,51 @@ export default function LeadsPage() {
               )}
             </div>
 
+            {/* Bulk Enroll in Sequence */}
+            <div className="relative">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBulkSequenceMenuOpen((v) => !v)}
+                className="h-7 text-xs bg-white text-[#33475b] gap-1 cursor-pointer"
+              >
+                <GitBranch className="h-3 w-3 text-[#0091ae]" />
+                <span>Enroll in Sequence</span>
+                <ChevronDown className="h-2.5 w-2.5" />
+              </Button>
+
+              {bulkSequenceMenuOpen && (
+                <div className="absolute right-0 mt-1 w-56 rounded-md border border-[#dfe3eb] bg-white p-1 shadow-lg z-50">
+                  <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 border-b border-[#f0f4f8]">
+                    Choose Sequence
+                  </div>
+                  {sequences.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        bulkAssignSequence(selectedIds, s.id);
+                        setBulkSequenceMenuOpen(false);
+                        setSelectedIds([]);
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] text-[#33475b] text-xs font-semibold truncate"
+                    >
+                      {s.name} ({s.steps.length} steps)
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      bulkAssignSequence(selectedIds, null);
+                      setBulkSequenceMenuOpen(false);
+                      setSelectedIds([]);
+                    }}
+                    className="w-full text-left px-2 py-1.5 rounded hover:bg-rose-50 text-rose-600 text-xs font-semibold border-t border-[#f0f4f8] mt-1"
+                  >
+                    Unenroll from Sequence
+                  </button>
+                </div>
+              )}
+            </div>
+
             <Button
               size="sm"
               variant="outline"
@@ -587,13 +637,9 @@ export default function LeadsPage() {
                   </div>
                 </th>
 
-                {/* <th className="px-4 py-3">Corporate Email</th> */}
+                <th className="px-4 py-3 whitespace-nowrap">Connection Status</th>
 
-                <th className="px-3 py-3 text-center">LinkedIn</th>
-
-                <th className="px-4 py-3">Connection Gate (D2)</th>
-
-                <th className="px-4 py-3">Assigned Cadence</th>
+                <th className="px-4 py-3">Assigned Sequence</th>
 
                 <th className="px-4 py-3">Lead Outcome</th>
 
@@ -619,7 +665,7 @@ export default function LeadsPage() {
             <tbody className="divide-y divide-[#eaf0f6]">
               {filteredLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-[#7c98b6]">
+                  <td colSpan={9} className="py-12 text-center text-[#7c98b6]">
                     <p className="font-bold text-[#2d3e50]">No leads found</p>
                     <p className="text-[11px] mt-1">Adjust filters or click &quot;Capture Lead&quot; to add one.</p>
                   </td>
@@ -663,7 +709,7 @@ export default function LeadsPage() {
                       <td className="px-4 py-3 font-semibold text-[#2d3e50] whitespace-nowrap">
                         {lead.company}
                       </td>
-
+{/* 
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 group">
                           <span className="truncate max-w-[150px] text-[#516f90]">
@@ -697,19 +743,74 @@ export default function LeadsPage() {
                         ) : (
                           <span className="text-slate-300">—</span>
                         )}
-                      </td>
+                      </td> */}
 
                       <td className="px-4 py-3 whitespace-nowrap">
                         {renderConnectionBadge(lead)}
                       </td>
 
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 relative">
                         {lead.sequenceName ? (
-                          <span className="truncate max-w-[140px] block font-semibold text-[#2d3e50]" title={lead.sequenceName}>
-                            {lead.sequenceName}
-                          </span>
+                          <div className="flex items-center gap-1 group/seq">
+                            <span className="truncate max-w-[130px] block font-semibold text-[#2d3e50]" title={lead.sequenceName}>
+                              {lead.sequenceName}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setAssigningSequenceLeadId(assigningSequenceLeadId === lead.id ? null : lead.id)}
+                              className="opacity-0 group-hover/seq:opacity-100 text-[10px] text-[#0091ae] hover:underline cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          </div>
                         ) : (
-                          <span className="text-[#7c98b6] italic">Unassigned</span>
+                          <button
+                            type="button"
+                            onClick={() => setAssigningSequenceLeadId(assigningSequenceLeadId === lead.id ? null : lead.id)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold text-[#0091ae] bg-[#e5f5f8] hover:bg-[#d6f0f5] border border-[#b2d5e5] transition-colors cursor-pointer"
+                          >
+                            <Plus className="h-3 w-3" />
+                            <span>Assign</span>
+                          </button>
+                        )}
+
+                        {/* Inline Sequence Dropdown */}
+                        {assigningSequenceLeadId === lead.id && (
+                          <div className="absolute left-4 top-10 w-52 rounded-md border border-[#dfe3eb] bg-white p-1 shadow-xl z-50 text-xs">
+                            <div className="px-2 py-1 text-[10px] font-bold uppercase text-slate-400 border-b border-[#f0f4f8] flex items-center justify-between">
+                              <span>Select Sequence</span>
+                              <button
+                                type="button"
+                                onClick={() => setAssigningSequenceLeadId(null)}
+                                className="text-slate-400 hover:text-slate-600"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            {sequences.map((s) => (
+                              <button
+                                key={s.id}
+                                onClick={() => {
+                                  assignSequenceToLead(lead.id, s.id);
+                                  setAssigningSequenceLeadId(null);
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] text-[#33475b] text-xs font-semibold truncate"
+                              >
+                                {s.name} ({s.steps.length} steps)
+                              </button>
+                            ))}
+                            {lead.sequenceId && (
+                              <button
+                                onClick={() => {
+                                  assignSequenceToLead(lead.id, null);
+                                  setAssigningSequenceLeadId(null);
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded hover:bg-rose-50 text-rose-600 text-xs font-semibold border-t border-[#f0f4f8] mt-1"
+                              >
+                                Unenroll from Sequence
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
 

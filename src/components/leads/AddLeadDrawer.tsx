@@ -14,7 +14,7 @@ interface AddLeadDrawerProps {
 }
 
 export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProps) {
-  const { leads, createLead, updateLead } = useCRM();
+  const { leads, sequences, createLead, updateLead } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'manual' | 'extension'>('manual');
 
@@ -25,6 +25,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
   const [company, setCompany] = useState(leadToEdit?.company || '');
   const [jobTitle, setJobTitle] = useState(leadToEdit?.jobTitle || '');
   const [linkedinUrl, setLinkedinUrl] = useState(leadToEdit?.linkedinUrl || '');
+  const [sequenceId, setSequenceId] = useState(leadToEdit?.sequenceId || '');
 
   // Errors & Duplicate warning
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -38,12 +39,14 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setCompany(leadToEdit.company);
       setJobTitle(leadToEdit.jobTitle);
       setLinkedinUrl(leadToEdit.linkedinUrl);
+      setSequenceId(leadToEdit.sequenceId || '');
     } else {
       setFirstName('');
       setLastName('');
       setCompany('');
       setJobTitle('');
       setLinkedinUrl('');
+      setSequenceId('');
     }
     setErrors({});
     setDuplicateWarning(null);
@@ -87,6 +90,8 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     e.preventDefault();
     if (!validate()) return;
 
+    const selectedSeq = sequenceId ? sequences.find((s) => s.id === sequenceId) : null;
+
     if (leadToEdit) {
       updateLead(leadToEdit.id, {
         firstName: firstName.trim(),
@@ -94,6 +99,11 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         company: company.trim(),
         jobTitle: jobTitle.trim(),
         linkedinUrl: linkedinUrl.trim(),
+        sequenceId: sequenceId || null,
+        sequenceName: selectedSeq?.name || null,
+        outreachStatus: sequenceId
+          ? (leadToEdit.outreachStatus === 'unassigned' ? 'in_sequence' : leadToEdit.outreachStatus)
+          : (leadToEdit.outreachStatus === 'in_sequence' ? 'unassigned' : leadToEdit.outreachStatus),
       });
     } else {
       createLead({
@@ -104,10 +114,12 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         linkedinUrl: linkedinUrl.trim(),
         email: null,
         channel: 'linkedin',
-        currentStepNumber: 0,
-        totalSteps: 4,
+        sequenceId: sequenceId || null,
+        sequenceName: selectedSeq?.name || null,
+        currentStepNumber: sequenceId ? 1 : 0,
+        totalSteps: selectedSeq ? selectedSeq.steps.length : 4,
         connectionStatus: 'not_started',
-        outreachStatus: 'unassigned',
+        outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
         disposition: 'active',
       });
     }
@@ -297,6 +309,29 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                   className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
                 />
                 {errors.linkedinUrl && <p className="text-[10px] text-rose-500">{errors.linkedinUrl}</p>}
+              </div>
+
+              {/* Outreach Sequence Cadence Selector */}
+              <div className="space-y-1">
+                <label className="font-bold text-[#33475b] flex items-center justify-between">
+                  <span>Outreach Sequence Cadence</span>
+                  <span className="text-[10px] text-[#7c98b6] font-normal">Optional</span>
+                </label>
+                <select
+                  value={sequenceId}
+                  onChange={(e) => setSequenceId(e.target.value)}
+                  className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
+                >
+                  <option value="">Unassigned (Assign later)</option>
+                  {sequences.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.steps.length} steps) {s.approvalStatus === 'approved' ? '✓ Approved' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500">
+                  Enrolling the lead immediately creates Step 1 outreach tasks in today&apos;s queue.
+                </p>
               </div>
             </form>
           )}

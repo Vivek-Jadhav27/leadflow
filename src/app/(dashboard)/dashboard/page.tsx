@@ -17,9 +17,10 @@ import {
 import { useAuthContext } from '@/context/AuthProvider';
 import { InviteMemberModal } from '@/components/team/InviteMemberModal';
 import { ROUTES } from '@/constants/routes';
+import { SDRDashboardView } from '@/components/dashboard/SDRDashboardView';
 
 export default function DashboardOverviewPage() {
-  const { user, currentWorkspace, isAdmin } = useAuthContext();
+  const { user, currentWorkspace, isAdmin, role } = useAuthContext();
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [stats, setStats] = useState({
     teamMembersCount: 1,
@@ -27,7 +28,12 @@ export default function DashboardOverviewPage() {
     sequencesCount: 0,
   });
 
-  const isOwnerOrAdmin = isAdmin || user?.role === 'admin';
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
+
+  // If SDR, display dedicated SDR Outreach Dashboard with Today's tasks
+  if (!isOwnerOrAdmin) {
+    return <SDRDashboardView />;
+  }
 
   // Fetch real workspace stats from backend
   useEffect(() => {

@@ -49,6 +49,7 @@ export default function SequencesPage() {
   } = useCRM();
 
   const { user, role, isAdmin } = useAuthContext();
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'approved' | 'pending'>('all');
   const [deletingSeqId, setDeletingSeqId] = useState<string | null>(null);
@@ -60,7 +61,7 @@ export default function SequencesPage() {
 
   const filteredSequences = sequences.filter((s) => {
     if (filterStatus === 'approved') return s.approvalStatus === 'approved';
-    if (filterStatus === 'pending') return s.approvalStatus === 'pending';
+    if (filterStatus === 'pending') return s.approvalStatus !== 'approved';
     return true;
   });
 
@@ -260,11 +261,11 @@ export default function SequencesPage() {
               <div className="pt-3 border-t border-[#dfe3eb] flex items-center justify-between">
                 <div className="flex items-center gap-1">
                   {/* Admin 1-Click Approve Button */}
-                  {!isApproved && isAdmin && (
+                  {!isApproved && isOwnerOrAdmin && (
                     <Button
                       size="sm"
-                      onClick={() => approveSequence(seq.id, user?.displayName || 'Admin')}
-                      className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1"
+                      onClick={() => approveSequence(seq.id, user?.displayName || user?.email || 'Admin')}
+                      className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1 cursor-pointer"
                       title="Approve this sequence as Admin"
                     >
                       <Check className="h-3 w-3" />

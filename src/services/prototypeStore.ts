@@ -100,6 +100,13 @@ class PrototypeStore {
           if (hasOldDemo) {
             localStorage.removeItem(STORAGE_KEY);
           } else {
+            if (Array.isArray(parsed.sequences)) {
+              parsed.sequences.forEach((s: any) => {
+                if (s.status === 'active' && (!s.approvalStatus || s.approvalStatus === 'pending')) {
+                  s.approvalStatus = 'approved';
+                }
+              });
+            }
             return parsed;
           }
         }
@@ -456,6 +463,87 @@ class PrototypeStore {
     return updated;
   }
 
+  public assignSequenceToLead(leadId: string, sequenceId: string | null): Lead | undefined {
+    const lead = this.getLeadById(leadId);
+    if (!lead) return undefined;
+
+    if (!sequenceId) {
+      const updated = this.updateLead(leadId, {
+        sequenceId: null,
+        sequenceName: null,
+        currentStepNumber: 0,
+        outreachStatus: 'unassigned',
+        nextFollowUpDate: null,
+        nextActionTitle: null,
+      });
+      // Remove any pending sequence tasks for this lead
+      this.db.tasks = this.db.tasks.filter((t) => t.leadId !== leadId || t.status === 'completed');
+      this.persistAndNotify();
+      return updated;
+    }
+
+    const seq = this.getSequenceById(sequenceId);
+    if (!seq) return undefined;
+
+    const firstStep = seq.steps && seq.steps.length > 0 ? seq.steps[0] : null;
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const updated = this.updateLead(leadId, {
+      sequenceId: seq.id,
+      sequenceName: seq.name,
+      currentStepNumber: 1,
+      totalSteps: seq.steps ? seq.steps.length : 4,
+      outreachStatus: 'in_sequence',
+      nextFollowUpDate: todayStr,
+      nextActionTitle: firstStep ? firstStep.title : 'Step 1 Action',
+    });
+
+    // Remove any previous pending tasks for this lead so they don't collide
+    this.db.tasks = this.db.tasks.filter((t) => t.leadId !== leadId || t.status === 'completed');
+
+    // Create the first task for this sequence
+    if (firstStep) {
+      let taskType: Task['type'] = 'linkedin_connect';
+      if (firstStep.actionType === 'send_message') taskType = 'linkedin_message';
+      else if (firstStep.actionType === 'followup') taskType = 'followup';
+
+      this.createTask({
+        title: `Step 1: ${firstStep.title} for ${lead.firstName} ${lead.lastName}`,
+        leadId: lead.id,
+        leadName: `${lead.firstName} ${lead.lastName}`,
+        leadCompany: lead.company,
+        leadLinkedin: lead.linkedinUrl,
+        sequenceId: seq.id,
+        stepNumber: 1,
+        type: taskType,
+        dueDate: todayStr,
+        assignedToId: lead.assignedToId || 'sdr_current',
+        assignedToName: lead.assignedToName || 'Outbound SDR',
+        priority: 'high',
+        status: 'pending',
+        messageTemplate: firstStep.messageTemplate,
+      });
+    }
+
+    this.addActivityEvent({
+      leadId: lead.id,
+      type: 'sequence_enrolled',
+      title: 'Enrolled in Sequence',
+      description: `Prospect was enrolled into sequence "${seq.name}". Step 1 task scheduled for today.`,
+      actorName: 'Workspace Member',
+      timestamp: new Date().toISOString(),
+    });
+
+    this.persistAndNotify();
+    return updated;
+  }
+
+  public bulkAssignSequence(leadIds: string[], sequenceId: string | null): void {
+    leadIds.forEach((id) => {
+      this.assignSequenceToLead(id, sequenceId);
+    });
+  }
+
   public bulkAssign(ids: string[], memberId: string): void {
     const member = this.db.team.find((m) => m.id === memberId);
     if (!member) return;
@@ -487,11 +575,21 @@ class PrototypeStore {
 
   // --- Sequences Operations ---
   public getSequences(): Sequence[] {
-    return [...this.db.sequences];
+    return this.db.sequences.map((s) => ({
+      ...s,
+      approvalStatus:
+        s.approvalStatus || (s.status === 'active' && s.approvedBy ? 'approved' : 'pending'),
+    }));
   }
 
   public getSequenceById(id: string): Sequence | undefined {
-    return this.db.sequences.find((s) => s.id === id);
+    const s = this.db.sequences.find((seq) => seq.id === id);
+    if (!s) return undefined;
+    return {
+      ...s,
+      approvalStatus:
+        s.approvalStatus || (s.status === 'active' && s.approvedBy ? 'approved' : 'pending'),
+    };
   }
 
   public saveSequence(sequence: Sequence): Sequence {
@@ -520,12 +618,15 @@ class PrototypeStore {
   }
 
   public approveSequence(id: string, approverName: string = 'Workspace Admin'): Sequence | undefined {
-    const seq = this.getSequenceById(id);
+    const seq = this.db.sequences.find((s) => s.id === id);
     if (!seq) return undefined;
 
+    const now = new Date().toISOString();
     seq.status = 'active';
+    seq.approvalStatus = 'approved';
     seq.approvedBy = approverName;
-    seq.updatedAt = new Date().toISOString();
+    seq.approvedAt = now;
+    seq.updatedAt = now;
 
     this.persistAndNotify();
     return seq;

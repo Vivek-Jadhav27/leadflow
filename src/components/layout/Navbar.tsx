@@ -25,18 +25,20 @@ import { GlobalSearchModal } from '@/components/common/GlobalSearchModal';
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, logout, switchRole, isAdmin } = useAuthContext();
+  const { user, logout, switchRole, isAdmin, role } = useAuthContext();
   const { stats, tasks, resetToDefaults } = useCRM();
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
 
-  const isOwnerOrAdmin = isAdmin || user?.role === 'admin';
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
   const pendingTasksCount = tasks.filter((t) => t.status === 'pending' || t.status === 'overdue').length;
 
+  const firstTabHref = isOwnerOrAdmin ? ROUTES.DASHBOARD : ROUTES.SDR_DASHBOARD;
+
   const navLinks = [
-    { label: 'Dashboard', href: ROUTES.DASHBOARD },
+    { label: isOwnerOrAdmin ? 'Overview' : 'Dashboard', href: firstTabHref },
     { label: 'Leads', href: ROUTES.LEADS, badge: stats.totalLeads },
     { label: 'Sequences', href: ROUTES.SEQUENCES },
     { label: 'Tasks', href: ROUTES.TASKS, badge: pendingTasksCount > 0 ? pendingTasksCount : null },
@@ -56,7 +58,7 @@ export const Navbar: React.FC = () => {
           {/* Brand + Main Navigation Links */}
           <div className="flex items-center gap-6 min-w-0">
             {/* Logo */}
-            <Link href={ROUTES.DASHBOARD} className="flex items-center gap-2.5 shrink-0 group">
+            <Link href={firstTabHref} className="flex items-center gap-2.5 shrink-0 group">
               <div className="h-7 w-7 rounded-md bg-[#ff7a59] text-white flex items-center justify-center font-black text-sm shadow-xs group-hover:bg-[#e06646] transition-colors">
                 L
               </div>
@@ -68,10 +70,14 @@ export const Navbar: React.FC = () => {
             {/* HubSpot horizontal navigation items */}
             <nav className="flex items-center gap-1 overflow-x-auto text-xs font-semibold py-1 scrollbar-none">
               {navLinks.map((item) => {
-                const isActive =
-                  item.href === '/dashboard'
-                    ? pathname === '/dashboard'
-                    : pathname.startsWith(item.href);
+                const isFirstItem = item.href === ROUTES.DASHBOARD || item.href === ROUTES.SDR_DASHBOARD;
+                const isActive = isFirstItem
+                  ? pathname === ROUTES.DASHBOARD ||
+                    pathname === ROUTES.SDR_DASHBOARD ||
+                    pathname === '/sdr/dashboard' ||
+                    pathname === '/workspace/dashboard' ||
+                    pathname === '/workspace/onboarding'
+                  : pathname.startsWith(item.href);
 
                 if (item.isSpecial) {
                   return (
@@ -137,8 +143,11 @@ export const Navbar: React.FC = () => {
             <div className="hidden lg:flex items-center bg-[#1f2a37] rounded-md p-0.5 border border-[#3d5066] text-[10px]">
               <button
                 type="button"
-                onClick={() => switchRole('admin')}
-                className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                onClick={() => {
+                  switchRole('admin');
+                  router.push(ROUTES.DASHBOARD);
+                }}
+                className={`px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ${
                   user?.role === 'admin'
                     ? 'bg-[#ff7a59] text-white shadow-xs'
                     : 'text-[#cbd9f4] hover:text-white'
@@ -148,8 +157,11 @@ export const Navbar: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => switchRole('sdr')}
-                className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                onClick={() => {
+                  switchRole('sdr');
+                  router.push(ROUTES.SDR_DASHBOARD);
+                }}
+                className={`px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ${
                   user?.role === 'sdr'
                     ? 'bg-[#0091ae] text-white shadow-xs'
                     : 'text-[#cbd9f4] hover:text-white'

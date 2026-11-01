@@ -186,6 +186,31 @@ export function useCRM() {
     return updated;
   }, [refreshAll]);
 
+  const assignSequenceToLead = useCallback(
+    (leadId: string, sequenceId: string | null) => {
+      const updated = prototypeStore.assignSequenceToLead(leadId, sequenceId);
+      if (updated) {
+        refreshAll();
+        if (sequenceId) {
+          toast.success(`Enrolled ${updated.firstName} in ${updated.sequenceName}!`);
+        } else {
+          toast.info(`Unenrolled ${updated.firstName} from sequence.`);
+        }
+      }
+      return updated;
+    },
+    [refreshAll]
+  );
+
+  const bulkAssignSequence = useCallback(
+    (leadIds: string[], sequenceId: string | null) => {
+      prototypeStore.bulkAssignSequence(leadIds, sequenceId);
+      refreshAll();
+      toast.success(`${leadIds.length} lead(s) sequence updated!`);
+    },
+    [refreshAll]
+  );
+
   const bulkAssign = useCallback((ids: string[], memberId: string) => {
     prototypeStore.bulkAssign(ids, memberId);
     refreshAll();
@@ -205,43 +230,63 @@ export function useCRM() {
   }, [refreshAll]);
 
   // Sequence actions
-  const saveSequence = useCallback((seq: Sequence) => {
-    const saved = prototypeStore.saveSequence(seq);
-    toast.success(`Sequence "${saved.name}" saved`);
-    return saved;
-  }, []);
+  const saveSequence = useCallback(
+    (seq: Sequence) => {
+      const saved = prototypeStore.saveSequence(seq);
+      refreshAll();
+      toast.success(`Sequence "${saved.name}" saved`);
+      return saved;
+    },
+    [refreshAll]
+  );
 
-  const approveSequence = useCallback((id: string, approverName?: string) => {
-    const approved = prototypeStore.approveSequence(id, approverName);
-    if (approved) {
-      toast.success(`Sequence "${approved.name}" approved and activated!`);
-    }
-    return approved;
-  }, []);
+  const approveSequence = useCallback(
+    (id: string, approverName?: string) => {
+      const approved = prototypeStore.approveSequence(id, approverName);
+      if (approved) {
+        refreshAll();
+        toast.success(`Sequence "${approved.name}" approved and activated!`);
+      }
+      return approved;
+    },
+    [refreshAll]
+  );
 
-  const duplicateSequence = useCallback((id: string) => {
-    const copy = prototypeStore.duplicateSequence(id);
-    if (copy) {
-      toast.success(`Created duplicate "${copy.name}"`);
-    }
-    return copy;
-  }, []);
+  const duplicateSequence = useCallback(
+    (id: string) => {
+      const copy = prototypeStore.duplicateSequence(id);
+      if (copy) {
+        refreshAll();
+        toast.success(`Created duplicate "${copy.name}"`);
+      }
+      return copy;
+    },
+    [refreshAll]
+  );
 
-  const deleteSequence = useCallback((id: string) => {
-    const ok = prototypeStore.deleteSequence(id);
-    if (ok) {
-      toast.success('Sequence deleted');
-    }
-    return ok;
-  }, []);
+  const deleteSequence = useCallback(
+    (id: string) => {
+      const ok = prototypeStore.deleteSequence(id);
+      if (ok) {
+        refreshAll();
+        toast.success('Sequence deleted');
+      }
+      return ok;
+    },
+    [refreshAll]
+  );
 
-  const toggleSequenceStatus = useCallback((id: string) => {
-    const updated = prototypeStore.toggleSequenceStatus(id);
-    if (updated) {
-      toast.success(`Sequence ${updated.status === 'active' ? 'activated' : 'paused'}`);
-    }
-    return updated;
-  }, []);
+  const toggleSequenceStatus = useCallback(
+    (id: string) => {
+      const updated = prototypeStore.toggleSequenceStatus(id);
+      if (updated) {
+        refreshAll();
+        toast.success(`Sequence ${updated.status === 'active' ? 'activated' : 'paused'}`);
+      }
+      return updated;
+    },
+    [refreshAll]
+  );
 
   // Task actions
   const createTask = useCallback((task: Omit<Task, 'id'>) => {
@@ -314,6 +359,8 @@ export function useCRM() {
     markReply,
     advanceLeadStep,
     bulkAssign,
+    bulkAssignSequence,
+    assignSequenceToLead,
     bulkArchive,
     bulkDelete,
     // Sequences

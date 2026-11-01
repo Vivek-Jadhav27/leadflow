@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Sparkles,
+  LayoutDashboard,
   Layers,
   GitBranch,
   CheckSquare,
@@ -22,19 +23,21 @@ export interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const pathname = usePathname();
-  const { user, isAdmin } = useAuthContext();
-  const isOwnerOrAdmin = isAdmin || user?.role === 'admin';
+  const { user, isAdmin, role } = useAuthContext();
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
 
   const isDashboardActive =
     pathname === ROUTES.DASHBOARD ||
+    pathname === ROUTES.SDR_DASHBOARD ||
+    pathname === '/sdr/dashboard' ||
     pathname === '/workspace/onboarding' ||
     pathname === '/workspace/dashboard';
 
   const navItems = [
     {
-      label: 'Overview',
-      href: ROUTES.DASHBOARD,
-      icon: Sparkles,
+      label: isOwnerOrAdmin ? 'Overview' : 'Dashboard',
+      href: isOwnerOrAdmin ? ROUTES.DASHBOARD : ROUTES.SDR_DASHBOARD,
+      icon: isOwnerOrAdmin ? Sparkles : LayoutDashboard,
       isActive: isDashboardActive,
     },
     {

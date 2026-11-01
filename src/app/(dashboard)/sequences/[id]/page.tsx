@@ -23,6 +23,7 @@ import {
   ExternalLink,
   ShieldCheck,
   Check,
+  X,
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
@@ -48,13 +49,16 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     approveSequence,
     toggleSequenceStatus,
     advanceLeadStep,
+    assignSequenceToLead,
   } = useCRM();
 
-  const { user, isAdmin } = useAuthContext();
+  const { user, isAdmin, role } = useAuthContext();
+  const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
 
   const originalSequence = sequences.find((s) => s.id === id);
 
   const [activeTab, setActiveTab] = useState<'builder' | 'workflow' | 'leads'>(initialTab);
+  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
 
   // Editable sequence state
   const [seqName, setSeqName] = useState(originalSequence?.name || '');
@@ -190,11 +194,11 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
 
         <div className="flex items-center gap-2">
           {/* Admin Approve Button */}
-          {!isApproved && isAdmin && (
+          {!isApproved && isOwnerOrAdmin && (
             <Button
               size="sm"
-              onClick={() => approveSequence(originalSequence.id, user?.displayName || 'Admin')}
-              className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+              onClick={() => approveSequence(originalSequence.id, user?.displayName || user?.email || 'Admin')}
+              className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs cursor-pointer"
             >
               <Check className="h-3.5 w-3.5" />
               <span>Approve &amp; Activate (Decision 3)</span>
@@ -454,12 +458,14 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
             <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px]">
               Enrolled Leads in this Sequence ({enrolledLeads.length})
             </h3>
-            <Link href="/leads?action=new">
-              <Button size="sm" className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold">
-                <Plus className="h-3 w-3 mr-1" />
-                <span>Enroll Lead</span>
-              </Button>
-            </Link>
+            <Button
+              size="sm"
+              onClick={() => setIsEnrollModalOpen(true)}
+              className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer"
+            >
+              <Plus className="h-3 w-3 mr-1" />
+              <span>Enroll Existing Lead</span>
+            </Button>
           </div>
 
           <div className="overflow-x-auto">
@@ -513,12 +519,24 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                             size="sm"
                             variant="outline"
                             onClick={() => advanceLeadStep(lead.id)}
-                            className="h-6 text-[10px] px-2 text-[#0091ae] border-[#b2d5e5] bg-white font-semibold"
+                            className="h-6 text-[10px] px-2 text-[#0091ae] border-[#b2d5e5] bg-white font-semibold cursor-pointer"
                           >
                             Advance Step
                           </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (confirm(`Unenroll ${lead.firstName} from ${originalSequence?.name}?`)) {
+                                assignSequenceToLead(lead.id, null);
+                              }
+                            }}
+                            className="h-6 text-[10px] px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
+                          >
+                            Unenroll
+                          </Button>
                           <Link href={ROUTES.LEAD_DETAIL(lead.id)}>
-                            <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-slate-500">
+                            <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-slate-500 cursor-pointer">
                               Profile
                             </Button>
                           </Link>
@@ -529,6 +547,87 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Enroll Lead Modal */}
+      {isEnrollModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg border border-[#dfe3eb] p-5 max-w-lg w-full shadow-xl space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
+              <div>
+                <h3 className="font-bold text-sm text-[#2d3e50]">
+                  Enroll Leads into {originalSequence?.name}
+                </h3>
+                <p className="text-xs text-[#7c98b6]">
+                  Select leads from your workspace pipeline to enroll into this cadence.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEnrollModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto divide-y divide-[#dfe3eb] flex-1">
+              {leads.filter((l) => l.sequenceId !== id && l.disposition !== 'archived').length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-xs">
+                  All active leads are already enrolled in this sequence or archived.
+                </div>
+              ) : (
+                leads
+                  .filter((l) => l.sequenceId !== id && l.disposition !== 'archived')
+                  .map((lead) => (
+                    <div
+                      key={lead.id}
+                      className="py-2.5 px-2 flex items-center justify-between hover:bg-[#f8fafc] text-xs"
+                    >
+                      <div>
+                        <p className="font-bold text-[#2d3e50]">
+                          {lead.firstName} {lead.lastName}
+                        </p>
+                        <p className="text-[11px] text-[#7c98b6]">
+                          {lead.jobTitle} at {lead.company}
+                          {lead.sequenceName ? ` · Currently in "${lead.sequenceName}"` : ' · Unassigned'}
+                        </p>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          assignSequenceToLead(lead.id, id);
+                          toast.success(`Enrolled ${lead.firstName} into ${originalSequence?.name}!`);
+                        }}
+                        className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer"
+                      >
+                        Enroll Now
+                      </Button>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-[#dfe3eb] flex items-center justify-between">
+              <Link href="/leads?action=new">
+                <Button size="sm" variant="outline" className="text-xs border-[#cbd6e2] text-[#2d3e50]">
+                  <Plus className="h-3 w-3 mr-1" />
+                  <span>Create New Lead</span>
+                </Button>
+              </Link>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setIsEnrollModalOpen(false)}
+                className="text-xs"
+              >
+                Done
+              </Button>
+            </div>
           </div>
         </div>
       )}

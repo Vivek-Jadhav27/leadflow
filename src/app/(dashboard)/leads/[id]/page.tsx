@@ -57,6 +57,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     enrichLead,
     markReply,
     advanceLeadStep,
+    assignSequenceToLead,
   } = useCRM();
 
   const lead = leads.find((l) => l.id === id);
@@ -70,6 +71,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [copiedText, setCopiedText] = useState<string | null>(null);
+  const [selectedSeqToAssign, setSelectedSeqToAssign] = useState<string>('');
 
   // Enrichment fields
   const [enrichPhone, setEnrichPhone] = useState(lead?.enrichedData?.phone || lead?.phone || '');
@@ -590,15 +592,32 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   LinkedIn Outreach Sequence Progression
                 </h3>
               </div>
-              {sequence && (
-                <Link
-                  href={ROUTES.SEQUENCE_DETAIL(sequence.id)}
-                  className="text-[#0091ae] hover:underline font-semibold flex items-center gap-1 text-[11px]"
-                >
-                  <span>{sequence.name}</span>
-                  <ExternalLink className="h-3 w-3" />
-                </Link>
-              )}
+              <div className="flex items-center gap-2">
+                {sequence ? (
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={ROUTES.SEQUENCE_DETAIL(sequence.id)}
+                      className="text-[#0091ae] hover:underline font-semibold flex items-center gap-1 text-[11px]"
+                    >
+                      <span>{sequence.name}</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Unenroll ${lead.firstName} from ${sequence.name}?`)) {
+                          assignSequenceToLead(lead.id, null);
+                        }
+                      }}
+                      className="text-[10px] text-rose-600 hover:text-rose-800 font-semibold hover:underline cursor-pointer ml-1"
+                    >
+                      Unenroll
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-[#7c98b6] italic">Unassigned</span>
+                )}
+              </div>
             </div>
 
             <div className="p-4 space-y-4">
@@ -633,8 +652,47 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
               </div>
 
-              {/* Step Sequence Timeline */}
-              {sequence && (
+              {/* Step Sequence Timeline or Empty Enrollment Card */}
+              {!sequence ? (
+                <div className="p-6 rounded-lg border border-dashed border-[#cbd6e2] bg-[#f8fafc] text-center space-y-3">
+                  <div className="h-10 w-10 rounded-full bg-[#e5f5f8] text-[#0091ae] flex items-center justify-center mx-auto">
+                    <Linkedin className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-[#2d3e50] text-sm">No Outreach Sequence Assigned</h4>
+                    <p className="text-xs text-[#516f90] max-w-md mx-auto mt-0.5">
+                      Assign {lead.firstName} to an active LinkedIn sequence cadence to schedule outreach tasks and start follow-ups.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-md mx-auto pt-2">
+                    <select
+                      value={selectedSeqToAssign}
+                      onChange={(e) => setSelectedSeqToAssign(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded border border-[#cbd6e2] bg-white text-[#2d3e50] focus:border-[#ff7a59] focus:outline-hidden"
+                    >
+                      <option value="">Choose a Sequence...</option>
+                      {sequences.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.steps.length} steps) {s.approvalStatus === 'approved' ? '✓ Approved' : ''}
+                        </option>
+                      ))}
+                    </select>
+
+                    <Button
+                      size="sm"
+                      disabled={!selectedSeqToAssign}
+                      onClick={() => {
+                        assignSequenceToLead(lead.id, selectedSeqToAssign);
+                        setSelectedSeqToAssign('');
+                      }}
+                      className="h-8 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold shadow-xs cursor-pointer"
+                    >
+                      <span>Enroll in Sequence</span>
+                    </Button>
+                  </div>
+                </div>
+              ) : (
                 <div className="pt-2">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-bold text-[#33475b]">

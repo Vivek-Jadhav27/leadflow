@@ -261,6 +261,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchRole = (r: UserRole) => {
+    if (user) {
+      setUser((prev) => (prev ? { ...prev, role: r } : null));
+    }
     if (r === 'admin') loginAsAdmin();
     else loginAsSDR();
   };
