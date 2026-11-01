@@ -3,6 +3,9 @@ import { authenticateServerRequest } from '@/lib/serverAuth';
 import { adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
 import { Workspace } from '@/types/auth';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const isConfigured = typeof isFirebaseAdminConfigured === 'function' ? isFirebaseAdminConfigured() : isFirebaseAdminConfigured;

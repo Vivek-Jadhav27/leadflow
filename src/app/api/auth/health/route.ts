@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { loadServiceAccount, isFirebaseAdminConfigured, getAdminApp, getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
