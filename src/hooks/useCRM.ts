@@ -39,53 +39,29 @@ export function useCRM() {
     return unsubscribe;
   }, [refreshAll]);
 
-  // Synchronize incoming leads & sequences from Firestore and Clipper API
+  // Synchronize incoming leads & sequences from Firestore on initial mount only
   useEffect(() => {
     let isMounted = true;
 
-    // Initial backfill: sync any existing local leads & sequences to Firestore
-    const initialCloudSync = async () => {
+    const loadCloudData = async () => {
       try {
-        const curLeads = prototypeStore.getLeads();
-        const curSeqs = prototypeStore.getSequences();
-        if (curLeads.length > 0 || curSeqs.length > 0) {
-          await fetch('/api/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ leads: curLeads, sequences: curSeqs }),
-          });
-        }
-      } catch (e) {
-        // Silently continue if offline
-      }
-    };
-
-    initialCloudSync();
-
-    const syncRemoteData = async () => {
-      try {
-        // 1. Sync leads from Firestore / API
+        // 1. Fetch leads from Firestore
         const leadsRes = await fetch('/api/leads');
         if (leadsRes.ok) {
           const data = await leadsRes.json();
           if (data.leads && Array.isArray(data.leads) && isMounted) {
-            const added = prototypeStore.syncIncomingLeads(data.leads);
-            if (added > 0) {
-              refreshAll();
-              toast.success(`⚡ Synced ${added} new lead(s) with Cloud!`);
-            }
+            prototypeStore.syncIncomingLeads(data.leads);
+            refreshAll();
           }
         }
 
-        // 2. Sync sequences from Firestore / API
+        // 2. Fetch sequences from Firestore
         const seqRes = await fetch('/api/sequences');
         if (seqRes.ok) {
           const data = await seqRes.json();
           if (data.sequences && Array.isArray(data.sequences) && isMounted) {
-            const addedSeqs = prototypeStore.syncIncomingSequences(data.sequences);
-            if (addedSeqs > 0) {
-              refreshAll();
-            }
+            prototypeStore.syncIncomingSequences(data.sequences);
+            refreshAll();
           }
         }
       } catch {
@@ -93,14 +69,10 @@ export function useCRM() {
       }
     };
 
-    syncRemoteData();
-    const interval = setInterval(syncRemoteData, 4000);
-    window.addEventListener('focus', syncRemoteData);
+    loadCloudData();
 
     return () => {
       isMounted = false;
-      clearInterval(interval);
-      window.removeEventListener('focus', syncRemoteData);
     };
   }, [refreshAll]);
 
@@ -194,11 +166,11 @@ export function useCRM() {
       const success = prototypeStore.deleteLead(id);
       if (success) {
         refreshAll();
-        // Persist to Firestore via API
-        fetch(`/api/leads?id=${id}`, { method: 'DELETE' }).catch((e) =>
+        // Persist to Firestore & backend via API
+        fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch((e) =>
           console.warn('Firestore sync warning for lead delete', e)
         );
-        toast.success('Lead and associated tasks removed');
+        toast.success('Lead permanently deleted');
       }
       return success;
     },
@@ -278,11 +250,21 @@ export function useCRM() {
     toast.success(`${ids.length} leads archived`);
   }, [refreshAll]);
 
-  const bulkDelete = useCallback((ids: string[]) => {
-    prototypeStore.bulkDelete(ids);
-    refreshAll();
-    toast.success(`${ids.length} leads deleted`);
-  }, [refreshAll]);
+  const bulkDelete = useCallback(
+    (ids: string[]) => {
+      if (!Array.isArray(ids) || ids.length === 0) return;
+      prototypeStore.bulkDelete(ids);
+      refreshAll();
+      // Persist bulk deletion to Firestore & backend via API
+      fetch('/api/leads', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      }).catch((e) => console.warn('Firestore sync warning for bulk lead delete', e));
+      toast.success(`${ids.length} leads permanently deleted`);
+    },
+    [refreshAll]
+  );
 
   // Sequence actions
   const saveSequence = useCallback(
@@ -445,6 +427,41 @@ export function useCRM() {
     toast.success('Reset all CRM data to initial sample seed');
   }, []);
 
+  const bulkCreateLeads = useCallback(
+    async (
+      leadsToCreate: Array<Partial<Lead>>,
+      defaults?: { defaultSequenceId?: string; defaultAssignedToId?: string; defaultAssignedToName?: string }
+    ) => {
+      try {
+        const res = await fetch('/api/leads/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leads: leadsToCreate,
+            ...defaults,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to import leads');
+        }
+
+        if (Array.isArray(data.leads)) {
+          prototypeStore.bulkAddLeads(data.leads);
+          refreshAll();
+        }
+
+        toast.success(`Successfully imported ${data.count || leadsToCreate.length} leads to Cloud Database!`);
+        return data.leads || [];
+      } catch (err: any) {
+        toast.error(`Import failed: ${err.message || 'Server error'}`);
+        throw err;
+      }
+    },
+    [refreshAll]
+  );
+
   return {
     leads,
     sequences,
@@ -454,6 +471,7 @@ export function useCRM() {
     settings,
     stats,
     syncToFirestore,
+    bulkCreateLeads,
     // Actions
     createLead,
     updateLead,

@@ -281,25 +281,41 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
+    const queryId = searchParams.get('id');
+    const queryIds = searchParams.get('ids');
     const linkedinUrl = searchParams.get('linkedinUrl');
 
-    let bodyId = null;
-    let bodyLinkedinUrl = null;
+    let bodyIds: string[] = [];
+    let bodyId: string | null = null;
+    let bodyLinkedinUrl: string | null = null;
+
     try {
       const body = await req.json();
+      if (Array.isArray(body?.ids)) {
+        bodyIds = body.ids;
+      }
       bodyId = body?.id;
       bodyLinkedinUrl = body?.linkedinUrl;
     } catch {
       // Body is optional
     }
 
-    const targetId = id || bodyId;
+    const targetIdsSet = new Set<string>();
+    if (queryId) targetIdsSet.add(queryId);
+    if (bodyId) targetIdsSet.add(bodyId);
+    if (queryIds) {
+      queryIds.split(',').map((s) => s.trim()).filter(Boolean).forEach((id) => targetIdsSet.add(id));
+    }
+    bodyIds.forEach((id) => {
+      if (id && typeof id === 'string') targetIdsSet.add(id.trim());
+    });
+
+    const targetIds = Array.from(targetIdsSet);
     const targetUrl = (linkedinUrl || bodyLinkedinUrl || '').trim().toLowerCase();
 
-    if (!targetId && !targetUrl) {
+    if (targetIds.length === 0 && !targetUrl) {
       return NextResponse.json(
-        { error: 'Lead id or linkedinUrl parameter is required' },
+        { error: 'Lead id, ids array, or linkedinUrl parameter is required' },
         { status: 400, headers: corsHeaders }
       );
     }
@@ -309,18 +325,28 @@ export async function DELETE(req: NextRequest) {
         ? isFirebaseAdminConfigured()
         : isFirebaseAdminConfigured;
 
-    // Delete from Firestore
-    if (isAdminReady && adminDb && targetId) {
+    // Delete from Firestore in batches
+    if (isAdminReady && adminDb && targetIds.length > 0) {
       try {
-        await adminDb.collection('leads').doc(targetId).delete();
+        const chunkSize = 400;
+        for (let i = 0; i < targetIds.length; i += chunkSize) {
+          const chunk = targetIds.slice(i, i + chunkSize);
+          const batch = adminDb.batch();
+          for (const tid of chunk) {
+            batch.delete(adminDb.collection('leads').doc(tid));
+          }
+          await batch.commit();
+        }
       } catch (fsErr) {
         console.warn('[API /leads DELETE] Firestore delete error:', fsErr);
       }
     }
 
+    // Delete matching items from local backup file
     const currentLeads = getStoredLeads();
+    const idSet = new Set(targetIds);
     const filtered = currentLeads.filter((l) => {
-      if (targetId && (l.id === targetId || String(l.id) === String(targetId))) return false;
+      if (idSet.has(l.id) || idSet.has(String(l.id))) return false;
       if (targetUrl && l.linkedinUrl && l.linkedinUrl.trim().toLowerCase() === targetUrl) return false;
       return true;
     });
@@ -330,8 +356,9 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: 'Lead deleted from Firestore and store',
-        count: filtered.length,
+        message: `Successfully deleted ${targetIds.length || 1} lead(s) from database`,
+        deletedCount: targetIds.length || 1,
+        remainingCount: filtered.length,
       },
       { status: 200, headers: corsHeaders }
     );

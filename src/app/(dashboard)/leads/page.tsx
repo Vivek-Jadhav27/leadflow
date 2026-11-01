@@ -7,6 +7,7 @@ import {
   Search,
   Plus,
   Download,
+  Upload,
   Trash2,
   Archive,
   Edit2,
@@ -27,6 +28,7 @@ import { useCRM } from '@/hooks/useCRM';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { AddLeadDrawer } from '@/components/leads/AddLeadDrawer';
+import { BulkUploadModal } from '@/components/leads/BulkUploadModal';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { formatDate } from '@/utils/date';
 import { toast } from 'sonner';
@@ -56,6 +58,7 @@ export default function LeadsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [bulkSequenceMenuOpen, setBulkSequenceMenuOpen] = useState(false);
   const [assigningSequenceLeadId, setAssigningSequenceLeadId] = useState<string | null>(null);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   // Filters state
   const [searchQuery, setSearchQuery] = useState('');
@@ -372,6 +375,18 @@ export default function LeadsPage() {
           >
             <Download className="h-3.5 w-3.5 text-[#7c98b6]" />
             <span className="hidden sm:inline">Export CSV</span>
+          </Button>
+
+          {/* Bulk Import CSV button */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setBulkUploadOpen(true)}
+            className="h-8 gap-1.5 text-xs text-[#33475b] border-[#cbd8eb] hover:bg-[#f5f8fa] font-medium"
+            title="Upload Leads via CSV"
+          >
+            <Upload className="h-3.5 w-3.5 text-[#ff7a59]" />
+            <span>Import CSV</span>
           </Button>
 
           {/* Add Lead button */}
@@ -904,6 +919,14 @@ export default function LeadsPage() {
           setDrawerOpen(false);
           setEditingLead(null);
         }}
+      />
+
+      {/* Bulk CSV Upload Modal */}
+      <BulkUploadModal
+        isOpen={bulkUploadOpen}
+        onClose={() => setBulkUploadOpen(false)}
+        sequences={sequences}
+        team={team}
       />
 
       {/* Delete Confirmation Dialog */}

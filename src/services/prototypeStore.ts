@@ -66,56 +66,22 @@ interface PrototypeDB {
 class PrototypeStore {
   private db: PrototypeDB;
   private listeners: Set<() => void> = new Set();
+  private deletedLeadIds: Set<string> = new Set();
 
   constructor() {
     this.db = this.loadFromStorage();
   }
 
   private loadFromStorage(): PrototypeDB {
-    if (typeof window === 'undefined') {
-      return {
-        leads: [],
-        sequences: [],
-        tasks: [],
-        activities: [],
-        team: [],
-        settings: SEEDED_SETTINGS,
-      };
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem('leadflow_prototype_db_v3');
+        localStorage.removeItem('leadflow_deleted_leads_v1');
+      } catch {}
     }
 
-    try {
-      localStorage.removeItem('leadflow_deleted_leads_v1');
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && Array.isArray(parsed.leads)) {
-          const hasOldDemo = parsed.leads.some(
-            (l: any) =>
-              l.company === 'HyperGrowth Cloud' ||
-              l.firstName === 'Elena' ||
-              l.id === 'lead_1' ||
-              l.assignedToName === 'Workspace Member' ||
-              l.assignedToName === 'Marcus Sterling'
-          );
-          if (hasOldDemo) {
-            localStorage.removeItem(STORAGE_KEY);
-          } else {
-            if (Array.isArray(parsed.sequences)) {
-              parsed.sequences.forEach((s: any) => {
-                if (s.status === 'active' && (!s.approvalStatus || s.approvalStatus === 'pending')) {
-                  s.approvalStatus = 'approved';
-                }
-              });
-            }
-            return parsed;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse localStorage prototype DB', e);
-    }
-
-    const initial: PrototypeDB = {
+    return {
       leads: [],
       sequences: [],
       tasks: [],
@@ -123,17 +89,15 @@ class PrototypeStore {
       team: [],
       settings: SEEDED_SETTINGS,
     };
-    this.saveToStorage(initial);
-    return initial;
   }
 
-  private saveToStorage(data: PrototypeDB) {
+  private saveToStorage(_data: PrototypeDB) {
+    // Explicit rule: Do not store lead/sequence data in browser localStorage.
+    // All persistent storage is managed directly by Firebase Firestore via server APIs.
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      } catch (e) {
-        console.warn('Failed to write to localStorage', e);
-      }
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
     }
   }
 
@@ -211,6 +175,24 @@ class PrototypeStore {
     return newLead;
   }
 
+  public bulkAddLeads(leads: Lead[]): number {
+    if (!Array.isArray(leads) || leads.length === 0) return 0;
+    let added = 0;
+    for (const lead of leads) {
+      const idx = this.db.leads.findIndex((l) => l.id === lead.id);
+      if (idx >= 0) {
+        this.db.leads[idx] = { ...this.db.leads[idx], ...lead };
+      } else {
+        this.db.leads.unshift(lead);
+        added++;
+      }
+    }
+    if (added > 0 || leads.length > 0) {
+      this.persistAndNotify();
+    }
+    return added;
+  }
+
   public syncIncomingLeads(incoming: any[]): number {
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
     let addedCount = 0;
@@ -218,6 +200,7 @@ class PrototypeStore {
     const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
 
     for (const item of incoming) {
+      if (!item.id || this.deletedLeadIds.has(item.id)) continue;
       const itemUrl = normUrl(item.linkedinUrl);
 
       const exists = this.db.leads.some(
@@ -225,7 +208,8 @@ class PrototypeStore {
       );
 
       if (!exists) {
-        this.createLead({
+        this.db.leads.push({
+          id: item.id,
           firstName: item.firstName || '',
           lastName: item.lastName || '',
           company: item.company || '',
@@ -236,17 +220,22 @@ class PrototypeStore {
           channel: 'linkedin',
           sequenceId: item.sequenceId || null,
           sequenceName: item.sequenceName || (item.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
-          currentStepNumber: item.currentStepNumber || 1,
-          totalSteps: 4,
-          connectionStatus: item.connectionStatus || 'not_connected',
+          currentStepNumber: item.currentStepNumber || 0,
+          totalSteps: item.totalSteps || 4,
+          connectionStatus: item.connectionStatus || 'not_started',
           outreachStatus: item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned'),
           disposition: item.disposition || 'active',
-          notes: item.notes || 'Captured via LeadFlow Chrome Extension',
+          notes: item.notes || null,
+          createdAt: item.createdAt || new Date().toISOString(),
+          updatedAt: item.updatedAt || new Date().toISOString(),
         });
         addedCount++;
       }
     }
 
+    if (addedCount > 0) {
+      this.persistAndNotify();
+    }
     return addedCount;
   }
 
@@ -283,15 +272,9 @@ class PrototypeStore {
   }
 
   public deleteLead(id: string): boolean {
+    this.deletedLeadIds.add(id);
     const lead = this.getLeadById(id);
     if (!lead) return false;
-
-    // Call backend API to delete from extension-leads.json
-    try {
-      fetch(`/api/leads?id=${encodeURIComponent(id)}&linkedinUrl=${encodeURIComponent(lead.linkedinUrl || '')}`, {
-        method: 'DELETE',
-      }).catch(() => {});
-    } catch {}
 
     this.db.leads = this.db.leads.filter((l) => l.id !== id);
     this.db.tasks = this.db.tasks.filter((t) => t.leadId !== id);
@@ -586,7 +569,12 @@ class PrototypeStore {
   }
 
   public bulkDelete(ids: string[]): void {
-    ids.forEach((id) => this.deleteLead(id));
+    ids.forEach((id) => this.deletedLeadIds.add(id));
+    const set = new Set(ids);
+    this.db.leads = this.db.leads.filter((l) => !set.has(l.id));
+    this.db.tasks = this.db.tasks.filter((t) => !t.leadId || !set.has(t.leadId));
+    this.db.activities = this.db.activities.filter((a) => !a.leadId || !set.has(a.leadId));
+    this.persistAndNotify();
   }
 
   // --- Sequences Operations ---
