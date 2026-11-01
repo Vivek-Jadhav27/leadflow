@@ -14,6 +14,26 @@ export interface EmailDeliveryResult {
   provider: 'smtp' | 'resend' | 'console-dev';
 }
 
+function sanitizeSmtpUser(raw?: string): string {
+  if (!raw) return '';
+  let str = raw.trim();
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1).trim();
+  }
+  const match = str.match(/<([^>]+)>/);
+  if (match) return match[1].trim();
+  return str;
+}
+
+function sanitizeSmtpPass(raw?: string): string {
+  if (!raw) return '';
+  let str = raw.trim();
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1).trim();
+  }
+  return str.replace(/\s+/g, '');
+}
+
 class EmailService {
   private transporter: Transporter | null = null;
   private defaultFrom = process.env.EMAIL_FROM || 'LeadFlow <noreply@leadflow.io>';
@@ -23,11 +43,10 @@ class EmailService {
   }
 
   private initTransporter() {
-    const host = process.env.SMTP_HOST;
+    const host = process.env.SMTP_HOST?.trim();
     const port = parseInt(process.env.SMTP_PORT || '465', 10);
-    const user = process.env.SMTP_USER;
-    const rawPass = process.env.SMTP_PASS;
-    const pass = rawPass ? rawPass.replace(/\s+/g, '') : '';
+    const user = sanitizeSmtpUser(process.env.SMTP_USER);
+    const pass = sanitizeSmtpPass(process.env.SMTP_PASS);
 
     if (host && user && pass) {
       if (host.includes('gmail')) {
