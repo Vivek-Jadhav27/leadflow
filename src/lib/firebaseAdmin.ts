@@ -4,41 +4,50 @@ import { getAuth, Auth } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 
 export function loadServiceAccount(): any | null {
-  // 1. Try FIREBASE_SERVICE_ACCOUNT_KEY (JSON string or file path)
   const keyEnv = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (keyEnv) {
     try {
-      let trimmed = keyEnv.trim();
+      let str = keyEnv.trim();
 
-      // Strip outer single or double quotes if present from .env / Vercel UI
+      // Strip outer quotes if wrapped
       if (
-        (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-        (trimmed.startsWith('"') && trimmed.endsWith('"'))
+        (str.startsWith("'") && str.endsWith("'")) ||
+        (str.startsWith('"') && str.endsWith('"'))
       ) {
-        trimmed = trimmed.slice(1, -1).trim();
+        str = str.slice(1, -1).trim();
       }
 
-      // Check if base64 encoded
-      if (!trimmed.startsWith('{') && !fs.existsSync(trimmed)) {
+      // Check if it's base64 encoded JSON
+      if (!str.startsWith('{') && !str.includes('\n') && str.length > 50) {
         try {
-          const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
-          if (decoded.trim().startsWith('{')) {
-            trimmed = decoded.trim();
+          const decoded = Buffer.from(str, 'base64').toString('utf8').trim();
+          if (decoded.startsWith('{')) {
+            str = decoded;
           }
         } catch {}
       }
 
-      if (trimmed.startsWith('{')) {
-        const parsed = JSON.parse(trimmed);
+      if (str.startsWith('{')) {
+        const parsed = JSON.parse(str);
         if (parsed.private_key && typeof parsed.private_key === 'string') {
-          parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+          parsed.private_key = parsed.private_key
+            .replace(/\\r\\n/g, '\n')
+            .replace(/\\n/g, '\n')
+            .replace(/\r\n/g, '\n')
+            .trim();
         }
         return parsed;
-      } else if (fs.existsSync(trimmed)) {
-        const fileContent = fs.readFileSync(trimmed, 'utf8');
-        const parsed = JSON.parse(fileContent);
+      }
+
+      // If it's a file path and under 255 chars, check existence
+      if (str.length < 255 && fs.existsSync(str)) {
+        const parsed = JSON.parse(fs.readFileSync(str, 'utf8'));
         if (parsed.private_key && typeof parsed.private_key === 'string') {
-          parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+          parsed.private_key = parsed.private_key
+            .replace(/\\r\\n/g, '\n')
+            .replace(/\\n/g, '\n')
+            .replace(/\r\n/g, '\n')
+            .trim();
         }
         return parsed;
       }
@@ -47,13 +56,17 @@ export function loadServiceAccount(): any | null {
     }
   }
 
-  // 2. Try FIREBASE_SERVICE_ACCOUNT_PATH or GOOGLE_APPLICATION_CREDENTIALS
+  // 2. Try file path variables
   const pathEnv = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (pathEnv && fs.existsSync(pathEnv)) {
+  if (pathEnv && pathEnv.length < 255 && fs.existsSync(pathEnv)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(pathEnv, 'utf8'));
       if (parsed.private_key && typeof parsed.private_key === 'string') {
-        parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+        parsed.private_key = parsed.private_key
+          .replace(/\\r\\n/g, '\n')
+          .replace(/\\n/g, '\n')
+          .replace(/\r\n/g, '\n')
+          .trim();
       }
       return parsed;
     } catch (e) {
@@ -70,47 +83,90 @@ export function loadServiceAccount(): any | null {
     return {
       project_id: process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
       client_email: process.env.FIREBASE_CLIENT_EMAIL,
-      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      private_key: process.env.FIREBASE_PRIVATE_KEY
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\r\n/g, '\n')
+        .trim(),
     };
   }
 
   return null;
 }
 
-const serviceAccountData = loadServiceAccount();
-export const isFirebaseAdminConfigured = serviceAccountData !== null;
+export function isFirebaseAdminConfigured(): boolean {
+  return loadServiceAccount() !== null;
+}
 
-// Initialize Firebase Admin singleton safely
-function getFirebaseAdminApp(): App {
+// Lazy safe initialization so module loading never crashes Next.js
+let _adminApp: App | null = null;
+let _adminAuth: Auth | null = null;
+let _adminDb: Firestore | null = null;
+
+export function getAdminApp(): App {
+  if (_adminApp) return _adminApp;
   if (getApps().length > 0) {
-    return getApp();
+    _adminApp = getApp();
+    return _adminApp;
   }
 
-  const sa = serviceAccountData || loadServiceAccount();
+  const sa = loadServiceAccount();
   if (sa) {
     try {
-      return initializeApp({
+      _adminApp = initializeApp({
         credential: cert(sa),
         projectId: sa.project_id || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
       });
+      return _adminApp;
     } catch (e) {
       console.error('[FirebaseAdmin] Failed to initialize with cert:', e);
     }
   }
 
-  // Fallback initialization
   const projectId =
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
     process.env.FIREBASE_PROJECT_ID ||
     'leadflow-914f9';
 
-  return initializeApp({
-    projectId,
-  });
+  _adminApp = initializeApp({ projectId });
+  return _adminApp;
 }
 
-const adminApp: App = getFirebaseAdminApp();
-const adminAuth: Auth = getAuth(adminApp);
-const adminDb: Firestore = getFirestore(adminApp);
+export function getAdminAuth(): Auth {
+  if (!_adminAuth) {
+    _adminAuth = getAuth(getAdminApp());
+  }
+  return _adminAuth;
+}
 
-export { adminApp, adminAuth, adminDb };
+export function getAdminDb(): Firestore {
+  if (!_adminDb) {
+    _adminDb = getFirestore(getAdminApp());
+  }
+  return _adminDb;
+}
+
+// Proxies that delegate to lazy getters (100% backward compatible without module crash)
+export const adminApp = new Proxy({} as App, {
+  get(_, prop) {
+    const target = getAdminApp();
+    const val = (target as any)[prop];
+    return typeof val === 'function' ? val.bind(target) : val;
+  },
+});
+
+export const adminAuth = new Proxy({} as Auth, {
+  get(_, prop) {
+    const target = getAdminAuth();
+    const val = (target as any)[prop];
+    return typeof val === 'function' ? val.bind(target) : val;
+  },
+});
+
+export const adminDb = new Proxy({} as Firestore, {
+  get(_, prop) {
+    const target = getAdminDb();
+    const val = (target as any)[prop];
+    return typeof val === 'function' ? val.bind(target) : val;
+  },
+});

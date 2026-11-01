@@ -30,7 +30,8 @@ export async function authenticateServerRequest(
     }
   }
 
-  if (!token || !isFirebaseAdminConfigured) {
+  const isConfigured = typeof isFirebaseAdminConfigured === 'function' ? isFirebaseAdminConfigured() : isFirebaseAdminConfigured;
+  if (!token || !isConfigured) {
     return null;
   }
 

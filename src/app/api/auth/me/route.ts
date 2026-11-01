@@ -5,7 +5,8 @@ import { Workspace } from '@/types/auth';
 
 export async function GET(req: NextRequest) {
   try {
-    if (!isFirebaseAdminConfigured) {
+    const isConfigured = typeof isFirebaseAdminConfigured === 'function' ? isFirebaseAdminConfigured() : isFirebaseAdminConfigured;
+    if (!isConfigured) {
       return NextResponse.json(
         {
           error: 'Firebase Admin SDK not configured.',
