@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateServerRequest } from '@/lib/serverAuth';
-import { adminDb } from '@/lib/firebaseAdmin';
+import { adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
 import { Workspace } from '@/types/auth';
 
 export async function GET(req: NextRequest) {
   try {
+    if (!isFirebaseAdminConfigured) {
+      return NextResponse.json(
+        {
+          error: 'Firebase Admin SDK not configured.',
+          hint: 'Please add FIREBASE_SERVICE_ACCOUNT_KEY to your Vercel Project Settings > Environment Variables.',
+        },
+        { status: 503 }
+      );
+    }
+
     const context = await authenticateServerRequest(req);
     if (!context) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -42,7 +52,6 @@ export async function GET(req: NextRequest) {
 
       for (const memberDoc of membersSnap.docs) {
         const memberData = memberDoc.data();
-        // In-memory filter for active status to avoid needing composite index
         if (memberData?.status === 'active') {
           const wsDocRef = memberDoc.ref.parent.parent;
           if (wsDocRef && !workspaceIdSet.has(wsDocRef.id)) {
@@ -73,15 +82,19 @@ export async function GET(req: NextRequest) {
       if (found) {
         currentWorkspace = found;
       } else {
-        const activeWsDoc = await adminDb.collection('workspaces').doc(targetWsId).get();
-        if (activeWsDoc.exists) {
-          const wsData = activeWsDoc.data() as Workspace;
-          if (wsData.status === 'active') {
-            currentWorkspace = wsData;
-            if (!workspaceIdSet.has(wsData.workspaceId)) {
-              accessibleWorkspaces.push(wsData);
+        try {
+          const activeWsDoc = await adminDb.collection('workspaces').doc(targetWsId).get();
+          if (activeWsDoc.exists) {
+            const wsData = activeWsDoc.data() as Workspace;
+            if (wsData.status === 'active') {
+              currentWorkspace = wsData;
+              if (!workspaceIdSet.has(wsData.workspaceId)) {
+                accessibleWorkspaces.push(wsData);
+              }
             }
           }
+        } catch (e) {
+          console.warn('[AuthMe] Active workspace query error:', e);
         }
       }
     }
@@ -97,9 +110,15 @@ export async function GET(req: NextRequest) {
       workspaces: accessibleWorkspaces,
     });
   } catch (error) {
+    const errorMsg = (error as Error)?.message || 'Internal server error';
     console.error('[AuthMe] Error:', error);
     return NextResponse.json(
-      { error: (error as Error)?.message || 'Internal server error' },
+      {
+        error: errorMsg,
+        hint: errorMsg.includes('credentials')
+          ? 'Add FIREBASE_SERVICE_ACCOUNT_KEY in Vercel Project Settings > Environment Variables.'
+          : undefined,
+      },
       { status: 500 }
     );
   }
