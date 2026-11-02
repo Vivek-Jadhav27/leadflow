@@ -528,6 +528,38 @@ class PrototypeStore {
       nextActionTitle: step?.title,
     });
 
+    // Mark previous pending tasks for this lead as completed
+    this.db.tasks
+      .filter((t) => t.leadId === id && t.status === 'pending')
+      .forEach((t) => {
+        t.status = 'completed';
+        t.completedAt = now;
+      });
+
+    // Create next step task carrying the sequence step's message template
+    if (step) {
+      let taskType: Task['type'] = 'linkedin_connect';
+      if (step.actionType === 'send_message') taskType = 'linkedin_message';
+      else if (step.actionType === 'followup') taskType = 'followup';
+
+      this.createTask({
+        title: `Step ${nextStepNum}: ${step.title} for ${lead.firstName} ${lead.lastName}`,
+        leadId: lead.id,
+        leadName: `${lead.firstName} ${lead.lastName}`,
+        leadCompany: lead.company,
+        leadLinkedin: lead.linkedinUrl,
+        sequenceId: seq.id,
+        stepNumber: nextStepNum,
+        type: taskType,
+        dueDate: dueDate,
+        assignedToId: lead.assignedToId || 'sdr_current',
+        assignedToName: lead.assignedToName || 'Outbound SDR',
+        priority: 'high',
+        status: 'pending',
+        messageTemplate: step.messageTemplate,
+      });
+    }
+
     const isStep1Dispatched = nextStepNum === 2;
     this.addActivityEvent({
       leadId: id,

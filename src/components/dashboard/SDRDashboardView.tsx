@@ -112,6 +112,7 @@ export function SDRDashboardView() {
       isCompleted: boolean;
       sequenceTitle?: string;
       stepNumber?: number;
+      stepTitle?: string;
       messageTemplate?: string;
     }> = [];
 
@@ -151,6 +152,12 @@ export function SDRDashboardView() {
         actionType = 'connect';
       }
 
+      // Resolve exact sequence and step template
+      const seq = sequences.find((s) => s.id === lead?.sequenceId || s.id === task.sequenceId);
+      const stepNum = task.stepNumber || lead?.currentStepNumber || 1;
+      const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
+      const stepTemplate = step?.messageTemplate || task.messageTemplate;
+
       items.push({
         id: task.id,
         task,
@@ -159,9 +166,10 @@ export function SDRDashboardView() {
         dueDate: task.dueDate,
         isOverdue,
         isCompleted,
-        sequenceTitle: lead.sequenceName || 'LinkedIn Outreach Cadence',
-        stepNumber: task.stepNumber || lead.currentStepNumber || 1,
-        messageTemplate: task.messageTemplate,
+        sequenceTitle: seq?.name || lead.sequenceName || 'LinkedIn Outreach Cadence',
+        stepNumber: stepNum,
+        stepTitle: step?.title || '',
+        messageTemplate: stepTemplate,
       });
     }
 
@@ -174,22 +182,35 @@ export function SDRDashboardView() {
       const isFollowupDue = l.outreachStatus === 'followup_due';
 
       if (isDueToday || isFollowupDue) {
+        const seq = sequences.find((s) => s.id === l.sequenceId);
+        const stepNum = l.currentStepNumber || 1;
+        const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
+        const stepTemplate = step?.messageTemplate;
+
+        let actionType: 'message' | 'followup' | 'connect' = 'followup';
+        if (step?.actionType === 'connection_request' || l.currentStepNumber === 1) {
+          actionType = 'connect';
+        } else if (step?.actionType === 'send_message') {
+          actionType = 'message';
+        }
+
         items.push({
           id: `lead_due_${l.id}`,
           lead: l,
-          type: 'followup',
+          type: actionType,
           dueDate: l.nextFollowUpDate || todayStr,
           isOverdue: Boolean(l.nextFollowUpDate && l.nextFollowUpDate < todayStr),
           isCompleted: false,
-          sequenceTitle: l.sequenceName || 'Outreach Cadence',
-          stepNumber: l.currentStepNumber || 2,
-          messageTemplate: undefined,
+          sequenceTitle: seq?.name || l.sequenceName || 'Outreach Cadence',
+          stepNumber: stepNum,
+          stepTitle: step?.title || '',
+          messageTemplate: stepTemplate,
         });
       }
     });
 
     return items;
-  }, [tasks, leads, todayStr]);
+  }, [tasks, leads, sequences, assignedLeads, todayStr]);
 
   // Tab filtering & search
   const filteredItems = useMemo(() => {
@@ -232,25 +253,44 @@ export function SDRDashboardView() {
     return { totalPending, messagesDue, followupsDue, completedToday, overdueCount };
   }, [todayItems]);
 
-  // Generate personalized template for a lead
+  // Generate personalized template matching exact sequence step
   const getPersonalizedMessage = (item: typeof todayItems[0]) => {
-    if (item.messageTemplate) {
-      return item.messageTemplate
-        .replace(/\{\{firstName\}\}/gi, item.lead.firstName || 'there')
+    // 1. Resolve exact sequence and step template
+    const seq = sequences.find(
+      (s) => s.id === item.lead.sequenceId || (item.task && s.id === item.task.sequenceId)
+    );
+    const stepNum = item.stepNumber || item.lead.currentStepNumber || 1;
+    const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
+
+    const rawTemplate =
+      item.messageTemplate ||
+      step?.messageTemplate ||
+      item.task?.messageTemplate;
+
+    if (rawTemplate && rawTemplate.trim()) {
+      return rawTemplate
+        .replace(/\{\{firstName\}\}/gi, item.lead.firstName || '')
         .replace(/\{\{lastName\}\}/gi, item.lead.lastName || '')
-        .replace(/\{\{company\}\}/gi, item.lead.company || 'your company')
-        .replace(/\{\{jobTitle\}\}/gi, item.lead.jobTitle || 'your role');
+        .replace(/\{\{company\}\}/gi, item.lead.company || '')
+        .replace(/\{\{jobTitle\}\}/gi, item.lead.jobTitle || '');
+    }
+
+    if (step && !step.messageTemplate) {
+      if (step.actionType === 'wait_for_acceptance') {
+        return `Awaiting connection acceptance from ${item.lead.firstName} on LinkedIn before sending next outreach message.`;
+      }
+      return `${step.title}: Action scheduled per cadence rules.`;
     }
 
     if (item.type === 'followup') {
-      return `Hi ${item.lead.firstName}, following up on my previous message regarding LeadFlow for ${item.lead.company}. Would love to hear your thoughts or share a quick 2-minute walkthrough!`;
+      return `Hi ${item.lead.firstName}, following up on my previous message regarding ${item.lead.company}.`;
     }
 
     if (item.type === 'connect') {
-      return `Hi ${item.lead.firstName}, saw your profile and leadership at ${item.lead.company}. I'd love to connect and follow your work!`;
+      return `Hi ${item.lead.firstName}, noticed your work at ${item.lead.company}. Would love to connect and follow your journey.`;
     }
 
-    return `Hi ${item.lead.firstName}, I noticed your work heading up ${item.lead.jobTitle || 'operations'} at ${item.lead.company}. We help sales teams streamline outbound sequences directly from LinkedIn. Would love to share ideas!`;
+    return `Hi ${item.lead.firstName}, noticed your work at ${item.lead.company}. Would love to connect!`;
   };
 
   // Actions
@@ -770,8 +810,11 @@ export function SDRDashboardView() {
                         {/* Message Preview Box */}
                         <div className="rounded-md border border-[#e2e8f0] bg-[#f8fafc] p-2.5 sm:p-3 text-xs text-[#33475b] relative group/msg">
                           <div className="flex items-center justify-between mb-1 pb-1 border-b border-[#eef2f6]">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#7c98b6]">
-                              {item.type === 'followup' ? 'Suggested Follow-up Message' : 'Personalized Outreach Message'}
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#0091ae] flex items-center gap-1.5">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#0091ae]" />
+                              {item.stepTitle
+                                ? `Sequence Step ${item.stepNumber}: ${item.stepTitle}`
+                                : `Sequence Message (Step ${item.stepNumber})`}
                             </span>
                             <button
                               type="button"
@@ -792,7 +835,7 @@ export function SDRDashboardView() {
                             </button>
                           </div>
 
-                          <p className="font-mono text-[11px] text-[#475569] leading-relaxed whitespace-pre-wrap">
+                          <p className="font-mono text-[11px] text-[#33475b] leading-relaxed whitespace-pre-wrap font-medium">
                             {personalizedMsg}
                           </p>
                         </div>
