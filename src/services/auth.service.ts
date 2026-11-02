@@ -1,5 +1,5 @@
 import { authRepository, AuthRepository } from '@/repositories/auth.repository';
-import { AuthUser, UserProfile } from '@/types/user';
+import { AuthUser, UserProfile, UserRole } from '@/types/user';
 import { getFirebaseErrorMessage } from '@/utils/firebaseError';
 import { User as FirebaseUser } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
@@ -10,7 +10,7 @@ export interface MeApiResponse {
   uid: string;
   email: string;
   name: string;
-  role: 'admin' | 'sdr';
+  role: UserRole;
   status: 'active' | 'disabled';
   currentWorkspaceId: string | null;
   currentWorkspace: Workspace | null;
@@ -65,7 +65,7 @@ export class AuthService {
       displayName: backendContext?.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
       photoURL: firebaseUser.photoURL,
       role,
-      title: role === 'admin' ? 'Workspace Owner' : 'Outbound Specialist',
+      title: role === 'admin' ? 'Workspace Owner' : (role === 'ae' ? 'Account Executive' : 'Outbound SDR'),
       emailVerified: firebaseUser.emailVerified,
       workspaceId,
       companyName,
@@ -110,6 +110,7 @@ export class AuthService {
    * Admin Signup and atomic workspace provisioning
    */
   async adminSignUp(params: {
+    fullName?: string;
     companyName: string;
     companyLinkedinUrl: string;
     email: string;
@@ -117,6 +118,10 @@ export class AuthService {
     confirmPassword?: string;
   }): Promise<{ user: AuthUser; workspaceId: string }> {
     try {
+      const userDisplayName = (params.fullName && params.fullName.trim())
+        ? params.fullName.trim()
+        : params.email.trim().split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
       let workspaceId = '';
       let isBackendProvisioned = false;
 
@@ -154,9 +159,11 @@ export class AuthService {
         const credential = await this.repository.signUpWithEmail(params.email, params.password);
         firebaseUser = credential.user;
 
-        if (params.companyName) {
-          await this.repository.updateDisplayName(firebaseUser, params.companyName.trim());
-        }
+        const userDisplayName = (params.fullName && params.fullName.trim())
+          ? params.fullName.trim()
+          : params.email.trim().split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+        await this.repository.updateDisplayName(firebaseUser, userDisplayName);
 
         workspaceId = `ws_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const now = new Date().toISOString();
@@ -166,7 +173,7 @@ export class AuthService {
         const userRef = doc(db, 'users', firebaseUser.uid);
         await setDoc(userRef, {
           uid: firebaseUser.uid,
-          name: params.companyName.trim(),
+          name: userDisplayName,
           email: emailNorm,
           emailNormalized: emailNorm,
           status: 'active',
@@ -193,6 +200,7 @@ export class AuthService {
         const memberRef = doc(db, 'workspaces', workspaceId, 'members', firebaseUser.uid);
         await setDoc(memberRef, {
           uid: firebaseUser.uid,
+          name: userDisplayName,
           role: 'admin',
           status: 'active',
           joinedAt: now,
@@ -210,7 +218,7 @@ export class AuthService {
       const authUser: AuthUser = {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
-        displayName: params.companyName.trim(),
+        displayName: userDisplayName,
         photoURL: null,
         role: 'admin',
         title: 'Workspace Owner',
@@ -261,7 +269,7 @@ export class AuthService {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${idToken}`,
         },
-        body: JSON.stringify({ token: params.token }),
+        body: JSON.stringify({ token: params.token, fullName: params.fullName }),
       });
 
       const acceptData = await acceptRes.json();
@@ -269,13 +277,14 @@ export class AuthService {
         throw new Error(acceptData.error || 'Failed to accept invitation.');
       }
 
+      const resolvedRole: UserRole = acceptData.role === 'ae' ? 'ae' : 'sdr';
       const authUser: AuthUser = {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
         displayName: params.fullName,
         photoURL: null,
-        role: 'sdr',
-        title: 'Outbound SDR',
+        role: resolvedRole,
+        title: resolvedRole === 'ae' ? 'Account Executive' : 'Outbound SDR',
         emailVerified: firebaseUser.emailVerified,
         workspaceId: acceptData.workspaceId,
         companyName: acceptData.companyName,

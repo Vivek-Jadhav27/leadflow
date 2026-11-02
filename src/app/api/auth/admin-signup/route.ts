@@ -22,8 +22,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { companyName, companyLinkedinUrl, email, password } = parseResult.data;
+    const { companyName, companyLinkedinUrl, email, password, fullName } = parseResult.data;
     const emailNorm = normalizeEmail(email);
+    const userDisplayName = (fullName && fullName.trim())
+      ? fullName.trim()
+      : emailNorm.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
     // If server does not have service account key, notify caller to use client SDK
     if (!isFirebaseAdminConfigured) {
@@ -76,7 +79,7 @@ export async function POST(req: NextRequest) {
         const newAuthUser = await adminAuth.createUser({
           email: emailNorm,
           password: password,
-          displayName: companyName.trim(),
+          displayName: userDisplayName,
           emailVerified: true,
         });
         uid = newAuthUser.uid;
@@ -120,7 +123,7 @@ export async function POST(req: NextRequest) {
       userRef,
       {
         uid,
-        name: companyName.trim(),
+        name: userDisplayName,
         email: emailNorm,
         emailNormalized: emailNorm,
         status: 'active',
@@ -160,6 +163,7 @@ export async function POST(req: NextRequest) {
       memberRef,
       {
         uid,
+        name: userDisplayName,
         role: 'admin',
         status: 'active',
         joinedAt: now,

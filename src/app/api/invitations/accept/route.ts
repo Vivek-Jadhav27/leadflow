@@ -20,6 +20,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const token = body?.token;
+    const incomingFullName = typeof body?.fullName === 'string' && body.fullName.trim() ? body.fullName.trim() : null;
 
     if (!token || typeof token !== 'string') {
       return NextResponse.json({ error: 'Invitation token is required.' }, { status: 400 });
@@ -81,6 +82,17 @@ export async function POST(req: NextRequest) {
         acceptedBy: uid,
       });
 
+      const targetRole = inviteData.role === 'ae' ? 'ae' : 'sdr';
+
+      // Resolve human name for member
+      let resolvedMemberName = incomingFullName || null;
+      if (!resolvedMemberName && context.profile?.name && context.profile.name.toLowerCase().trim() !== (wsData?.companyName || '').toLowerCase().trim()) {
+        resolvedMemberName = context.profile.name;
+      }
+      if (!resolvedMemberName) {
+        resolvedMemberName = callerEmailNorm.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      }
+
       // 5. Create / activate member record
       const memberRef = adminDb
         .collection('workspaces')
@@ -92,7 +104,8 @@ export async function POST(req: NextRequest) {
         memberRef,
         {
           uid,
-          role: 'sdr',
+          name: resolvedMemberName,
+          role: targetRole,
           status: 'active',
           joinedAt: now.toISOString(),
           invitedBy: inviteData.invitedBy,
@@ -106,9 +119,10 @@ export async function POST(req: NextRequest) {
         userRef,
         {
           uid,
+          name: resolvedMemberName,
           email: callerEmailNorm,
           emailNormalized: callerEmailNorm,
-          role: 'sdr',
+          role: targetRole,
           status: 'active',
           currentWorkspaceId: workspaceId,
           updatedAt: now.toISOString(),
@@ -125,12 +139,13 @@ export async function POST(req: NextRequest) {
         workspaceId,
         targetId: inviteDoc.id,
         timestamp: now.toISOString(),
-        details: { email: callerEmailNorm, role: 'sdr' },
+        details: { email: callerEmailNorm, role: targetRole },
       });
 
       return {
         workspaceId,
         companyName: wsData?.companyName || 'LeadFlow Workspace',
+        role: targetRole,
       };
     });
 
@@ -138,6 +153,7 @@ export async function POST(req: NextRequest) {
       success: true,
       workspaceId: result.workspaceId,
       companyName: result.companyName,
+      role: result.role,
       message: 'Invitation accepted successfully! Welcome to the workspace.',
     });
   } catch (error: unknown) {

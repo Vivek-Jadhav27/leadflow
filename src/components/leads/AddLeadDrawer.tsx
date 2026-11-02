@@ -19,10 +19,11 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
   const { user, isAdmin, currentWorkspace } = useAuthContext();
 
   const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
-  const isSdr = !isAdmin && !!user;
-  const currentSdrName = user?.displayName || user?.email?.split('@')[0] || 'Outbound SDR';
-  const currentSdrEmail = user?.email || '';
-  const currentSdrId = user?.uid || 'sdr_current';
+  const isIndividualRep = !isAdmin && !!user;
+  const currentRepRole = user?.role === 'ae' ? 'Account Executive' : 'Outbound SDR';
+  const currentRepName = user?.displayName || user?.email?.split('@')[0] || currentRepRole;
+  const currentRepEmail = user?.email || '';
+  const currentRepId = user?.uid || (user?.role === 'ae' ? 'ae_current' : 'sdr_current');
 
   const [activeTab, setActiveTab] = useState<'manual' | 'extension'>('manual');
 
@@ -34,11 +35,22 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
   const [jobTitle, setJobTitle] = useState(leadToEdit?.jobTitle || '');
   const [linkedinUrl, setLinkedinUrl] = useState(leadToEdit?.linkedinUrl || '');
   const [sequenceId, setSequenceId] = useState(leadToEdit?.sequenceId || '');
-  const [assignedToId, setAssignedToId] = useState(leadToEdit?.assignedToId || (isSdr ? currentSdrId : ''));
+  const [assignedToId, setAssignedToId] = useState(leadToEdit?.assignedToId || (isIndividualRep ? currentRepId : ''));
 
   // Errors & Duplicate warning
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+
+  const availableSequences = React.useMemo(() => {
+    return sequences.filter((s) => {
+      if (isAdmin) return true;
+      const isCreator = (user?.uid && s.createdByUid === user.uid) ||
+        (user?.email && s.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
+      const isAdminCreated = s.createdByRole === 'admin' || !s.createdByUid || s.createdBy === 'Workspace Admin' || s.createdBy?.toLowerCase().includes('admin');
+      const matchesTargetRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === user?.role;
+      return isCreator || (isAdminCreated && matchesTargetRole);
+    });
+  }, [sequences, isAdmin, user]);
 
   const sdrTeam = React.useMemo(() => {
     return team.filter((m) => {
@@ -65,11 +77,11 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
       setJobTitle('');
       setLinkedinUrl('');
       setSequenceId('');
-      setAssignedToId(isSdr ? currentSdrId : '');
+      setAssignedToId(isIndividualRep ? currentRepId : '');
     }
     setErrors({});
     setDuplicateWarning(null);
-  }, [leadToEdit, isOpen, isSdr, currentSdrId]);
+  }, [leadToEdit, isOpen, isIndividualRep, currentRepId]);
 
   if (!isOpen) return null;
 
@@ -110,10 +122,10 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     if (!validate()) return;
 
     const selectedSeq = sequenceId ? sequences.find((s) => s.id === sequenceId) : null;
-    const finalAssigneeId = isSdr ? currentSdrId : (assignedToId || null);
+    const finalAssigneeId = isIndividualRep ? currentRepId : (assignedToId || null);
     const selectedMember = team.find((m) => m.id === finalAssigneeId);
-    const finalAssigneeName = isSdr ? currentSdrName : (selectedMember?.name || null);
-    const finalAssigneeEmail = isSdr ? currentSdrEmail : (selectedMember?.email || null);
+    const finalAssigneeName = isIndividualRep ? currentRepName : (selectedMember?.name || null);
+    const finalAssigneeEmail = isIndividualRep ? currentRepEmail : (selectedMember?.email || null);
 
     if (leadToEdit) {
       updateLead(leadToEdit.id, {
@@ -354,9 +366,9 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                   className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-white text-[#33475b] focus:outline-none focus:border-[#ff7a59]"
                 >
                   <option value="">Unassigned (Assign later)</option>
-                  {sequences.map((s) => (
+                  {availableSequences.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.name} ({s.steps.length} steps) {s.approvalStatus === 'approved' ? '✓ Approved' : ''}
+                      {s.name} ({s.steps.length} steps) {s.approvalStatus === 'approved' ? '✓ Approved' : ''} {s.targetRole ? `[${s.targetRole.toUpperCase()}]` : ''}
                     </option>
                   ))}
                 </select>
@@ -365,20 +377,27 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                 </p>
               </div>
 
-              {/* SDR Representative Assignment */}
+              {/* Representative Assignment */}
               <div className="space-y-1">
                 <label className="font-bold text-[#33475b] flex items-center justify-between">
-                  <span>Assigned SDR Representative</span>
-                  {isSdr && (
+                  <span>Assigned Representative ({user?.role === 'ae' ? 'AE' : 'SDR'})</span>
+                  {isIndividualRep && (
                     <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-200">
                       Auto-assigned to You
                     </span>
                   )}
                 </label>
-                {isSdr ? (
-                  <div className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-[#f5f8fa] text-[#33475b] font-medium flex items-center gap-2">
-                    <span>{currentSdrName}</span>
-                    <span className="text-[10px] text-slate-400">({currentSdrEmail})</span>
+                {isIndividualRep ? (
+                  <div className="w-full rounded-md border border-[#cbd8eb] px-3 py-1.5 text-xs bg-[#f5f8fa] text-[#33475b] font-medium flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{currentRepName}</span>
+                      <span className="text-[10px] text-slate-400">({currentRepEmail})</span>
+                    </div>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold uppercase ${
+                      user?.role === 'ae' ? 'bg-[#f5f3ff] text-[#7c3aed]' : 'bg-[#e5f5f8] text-[#0091ae]'
+                    }`}>
+                      {user?.role === 'ae' ? 'AE' : 'SDR'}
+                    </span>
                   </div>
                 ) : (
                   <select
@@ -389,12 +408,12 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                     <option value="">Unassigned (Round Robin / Pool)</option>
                     {leadToEdit?.assignedToId && !sdrTeam.some((m) => m.id === leadToEdit.assignedToId) && (
                       <option value={leadToEdit.assignedToId}>
-                        {leadToEdit.assignedToName || leadToEdit.assignedToEmail || 'Assigned SDR'} (SDR)
+                        {leadToEdit.assignedToName || leadToEdit.assignedToEmail || 'Assigned Representative'}
                       </option>
                     )}
                     {sdrTeam.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.name} ({m.role || 'SDR'})
+                        {m.name} ({m.role || 'Representative'})
                       </option>
                     ))}
                   </select>

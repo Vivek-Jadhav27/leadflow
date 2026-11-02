@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
       companyName: wsData?.companyName || inviteData.companyName || 'LeadFlow Workspace',
       companyLinkedinUrl: wsData?.companyLinkedinUrl || null,
       email: inviteData.email,
-      role: 'sdr',
+      role: inviteData.role || 'sdr',
       expiresAt: inviteData.expiresAt,
     });
   } catch (error) {

@@ -19,6 +19,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
 }) => {
   const { currentWorkspace } = useAuthContext();
   const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'sdr' | 'ae'>('sdr');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -38,6 +39,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
 
   const handleReset = () => {
     setEmail('');
+    setRole('sdr');
     setErrorMsg('');
     setSuccessMsg('');
     setGeneratedLink(null);
@@ -74,7 +76,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
           Authorization: `Bearer ${idToken}`,
           'x-workspace-id': currentWorkspace?.workspaceId || '',
         },
-        body: JSON.stringify({ email: trimmed }),
+        body: JSON.stringify({ email: trimmed, role }),
       });
 
       const data = await res.json();
@@ -90,7 +92,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
 
       setGeneratedLink(data.invitationLink || null);
       setDeliveryProvider(data.provider || null);
-      setSuccessMsg(`Invitation created for ${trimmed} with 48-hour secure token.`);
+      setSuccessMsg(`Invitation created for ${trimmed} as ${role === 'ae' ? 'Account Executive (AE)' : 'Sales Development Rep (SDR)'} with 48-hour secure token.`);
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
       setErrorMsg((err as Error).message || 'Network error sending invitation.');
@@ -152,7 +154,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
             <UserPlus className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="font-bold text-base text-[#2d3e50]">Invite Sales Representative (SDR)</h3>
+            <h3 className="font-bold text-base text-[#2d3e50]">Invite Team Member</h3>
             <p className="text-xs text-[#516f90]">
               Workspace: {currentWorkspace?.companyName || 'LeadFlow Workspace'}
             </p>
@@ -236,7 +238,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
                 onClick={handleReset}
                 className="text-xs font-semibold text-[#0091ae] hover:underline"
               >
-                + Invite another SDR
+                + Invite another team member
               </button>
               <button
                 type="button"
@@ -251,7 +253,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-[#33475b] mb-1.5">
-                SDR Email Address <span className="text-rose-500">*</span>
+                Team Member Email Address <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[#7c98b6]" />
@@ -259,7 +261,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="sdr@company.com"
+                  placeholder="colleague@company.com"
                   disabled={isSubmitting}
                   className="w-full pl-9 pr-3 py-2 text-xs rounded-md border border-[#cbd6e2] focus:outline-none focus:border-[#0091ae] focus:ring-1 focus:ring-[#0091ae]"
                 />
@@ -269,14 +271,57 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
               </p>
             </div>
 
-            {/* Assigned Role (Fixed to SDR) */}
-            <div className="p-3 rounded-md bg-[#f8fafc] border border-[#e2e8f0] flex items-center justify-between text-xs">
-              <div>
-                <span className="font-semibold text-[#2d3e50] block">Assigned Role</span>
-                <span className="text-[11px] text-[#516f90]">Cannot be changed during invitation</span>
-              </div>
-              <div className="px-2.5 py-1 rounded bg-[#e5f5f8] text-[#0091ae] font-semibold text-[11px] uppercase tracking-wide">
-                SDR
+            {/* Role Selection */}
+            <div>
+              <label className="block text-xs font-semibold text-[#33475b] mb-1.5">
+                Assign Role <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2.5">
+                <label
+                  className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
+                    role === 'sdr'
+                      ? 'border-[#0091ae] bg-[#f0f9fb] ring-1 ring-[#0091ae]'
+                      : 'border-[#dfe3eb] bg-white hover:bg-[#f8fafc]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-[#2d3e50]">SDR</span>
+                    <input
+                      type="radio"
+                      name="inviteRole"
+                      value="sdr"
+                      checked={role === 'sdr'}
+                      onChange={() => setRole('sdr')}
+                      className="text-[#0091ae] focus:ring-[#0091ae]"
+                    />
+                  </div>
+                  <p className="text-[10px] text-[#516f90] mt-1 leading-snug">
+                    Sales Development Rep. Prospecting, outreach &amp; lead qualification.
+                  </p>
+                </label>
+
+                <label
+                  className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
+                    role === 'ae'
+                      ? 'border-[#7c3aed] bg-[#f5f3ff] ring-1 ring-[#7c3aed]'
+                      : 'border-[#dfe3eb] bg-white hover:bg-[#f8fafc]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-[#2d3e50]">AE</span>
+                    <input
+                      type="radio"
+                      name="inviteRole"
+                      value="ae"
+                      checked={role === 'ae'}
+                      onChange={() => setRole('ae')}
+                      className="text-[#7c3aed] focus:ring-[#7c3aed]"
+                    />
+                  </div>
+                  <p className="text-[10px] text-[#516f90] mt-1 leading-snug">
+                    Account Executive. Deal closing, pipeline management &amp; personalized cadences.
+                  </p>
+                </label>
               </div>
             </div>
 

@@ -101,13 +101,13 @@ export default function LeadsPage() {
       }
     });
 
-    // 3. If currently logged in user is an SDR (not admin), ensure they are present
+    // 3. If currently logged in user is not admin (SDR or AE), ensure they are present
     if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
       list.push({
         id: user.uid,
-        name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+        name: user.displayName || (user.email ? user.email.split('@')[0] : (user.role === 'ae' ? 'Current AE' : 'Current SDR')),
         email: user.email || '',
-        role: 'Outbound SDR',
+        role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
         initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
         status: 'active',
         assignedLeadsCount: 0,
@@ -158,15 +158,17 @@ export default function LeadsPage() {
         }
 
         // 2. Role-based Access Control:
-        // SDR can see ONLY their assigned leads within this workspace
+        // Individual reps (SDR or AE) see ONLY leads added by them or assigned to them by admin
         if (!isAdmin) {
           const userEmailNorm = (user?.email || '').toLowerCase().trim();
           const leadAssignedEmail = (lead.assignedToEmail || '').toLowerCase().trim();
-          const isAssigned =
+          const leadCapturedEmail = (lead.capturedBy || '').toLowerCase().trim();
+          const isOwnerOrAssigned =
             (user?.uid && lead.assignedToId === user.uid) ||
             (user?.uid && lead.capturedByUid === user.uid) ||
-            (userEmailNorm && leadAssignedEmail && leadAssignedEmail === userEmailNorm);
-          if (!isAssigned) return false;
+            (userEmailNorm && leadAssignedEmail && leadAssignedEmail === userEmailNorm) ||
+            (userEmailNorm && leadCapturedEmail && leadCapturedEmail === userEmailNorm);
+          if (!isOwnerOrAssigned) return false;
         }
 
         // Active vs Archived

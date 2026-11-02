@@ -157,9 +157,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
       list.push({
         id: user.uid,
-        name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+        name: user.displayName || (user.email ? user.email.split('@')[0] : (user.role === 'ae' ? 'Current AE' : 'Current SDR')),
         email: user.email || '',
-        role: 'Outbound SDR',
+        role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
         initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
         status: 'active',
         assignedLeadsCount: 0,
@@ -274,23 +274,26 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [enrichTech, setEnrichTech] = useState(lead?.enrichedData?.techStack?.join(', ') || 'HubSpot, React, AWS, Postgres');
   const [enrichNotes, setEnrichNotes] = useState(lead?.enrichedData?.enrichmentNotes || 'Verified corporate contact. High fit for Q4 expansion.');
 
-  // Access Control: SDR can view ONLY assigned leads
-  const isUnauthorizedSdr =
-    !isAdmin &&
-    user &&
-    lead &&
-    lead.assignedToId !== user.uid &&
-    (!user.email || !lead.assignedToEmail || lead.assignedToEmail.toLowerCase().trim() !== user.email.toLowerCase().trim());
+  // Access Control: Individual rep (SDR or AE) can view ONLY leads added by them or assigned to them
+  const userEmailNorm = (user?.email || '').toLowerCase().trim();
+  const leadAssignedEmail = (lead?.assignedToEmail || '').toLowerCase().trim();
+  const leadCapturedEmail = (lead?.capturedBy || '').toLowerCase().trim();
 
-  if (!lead || isUnauthorizedSdr) {
+  const isAssignedOrCreator =
+    (user?.uid && (lead?.assignedToId === user.uid || lead?.capturedByUid === user.uid)) ||
+    (userEmailNorm && (leadAssignedEmail === userEmailNorm || leadCapturedEmail === userEmailNorm));
+
+  const isUnauthorized = !isAdmin && user && lead && !isAssignedOrCreator;
+
+  if (!lead || isUnauthorized) {
     return (
       <div className="py-16 text-center space-y-3">
         <h3 className="text-base font-semibold text-[#33475b]">
-          {isUnauthorizedSdr ? 'Access Restricted' : 'Lead Not Found'}
+          {isUnauthorized ? 'Access Restricted' : 'Lead Not Found'}
         </h3>
         <p className="text-xs text-slate-500">
-          {isUnauthorizedSdr
-            ? 'This lead is not assigned to you. SDR representatives can only access their assigned leads.'
+          {isUnauthorized
+            ? 'This lead is not assigned to you or created by you. Individual representatives can only access leads they added or were assigned by an administrator.'
             : 'The lead may have been deleted or is inaccessible.'}
         </p>
         <Link href={ROUTES.LEADS}>

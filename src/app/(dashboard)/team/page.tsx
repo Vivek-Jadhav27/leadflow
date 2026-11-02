@@ -344,10 +344,8 @@ export default function TeamPage() {
                   onChange={(e) => setInviteRole(e.target.value)}
                   className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:outline-none"
                 >
-                  <option value="Outbound SDR">Outbound SDR</option>
-                  <option value="Lead SDR">Lead SDR</option>
-                  <option value="Account Executive">Account Executive</option>
-                  <option value="Sales Operations">Sales Operations</option>
+                  <option value="Outbound SDR">Sales Development Rep (SDR)</option>
+                  <option value="Account Executive">Account Executive (AE)</option>
                 </select>
               </div>
 

@@ -196,8 +196,10 @@ export default function SettingsPage() {
 
               <div>
                 <span className="text-[10px] uppercase font-semibold text-slate-400">Current Active Role</span>
-                <p className="font-bold text-[#0091ae] uppercase mt-0.5">
-                  {role} ({role === 'admin' ? 'Lane 1: Workspace Owner' : 'Lane 2: Team Member SDR'})
+                <p className={`font-bold uppercase mt-0.5 ${
+                  role === 'admin' ? 'text-[#ff7a59]' : (role === 'ae' ? 'text-[#7c3aed]' : 'text-[#0091ae]')
+                }`}>
+                  {role} ({role === 'admin' ? 'Lane 1: Workspace Owner' : (role === 'ae' ? 'Lane 3: Account Executive (AE)' : 'Lane 2: Team Member SDR')})
                 </p>
                 <p className="text-[11px] text-slate-500">Switch role anytime using the top nav pill</p>
               </div>

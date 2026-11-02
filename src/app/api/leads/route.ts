@@ -107,14 +107,17 @@ export async function GET(req: NextRequest) {
       : merged;
 
     if (authContext) {
-      if (authContext.role === 'sdr') {
-        const sdrUid = authContext.uid;
-        const sdrEmail = (authContext.email || '').toLowerCase().trim();
+      if (authContext.role !== 'admin') {
+        const userUid = authContext.uid;
+        const userEmail = (authContext.email || '').toLowerCase().trim();
         finalLeads = finalLeads.filter((l) => {
+          const assignedEmail = (l.assignedToEmail || '').toLowerCase().trim();
+          const capturedEmail = (l.capturedBy || '').toLowerCase().trim();
           return (
-            (l.assignedToId && l.assignedToId === sdrUid) ||
-            (l.capturedByUid && l.capturedByUid === sdrUid) ||
-            (l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === sdrEmail)
+            (l.assignedToId && l.assignedToId === userUid) ||
+            (l.capturedByUid && l.capturedByUid === userUid) ||
+            (assignedEmail && assignedEmail === userEmail) ||
+            (capturedEmail && capturedEmail === userEmail)
           );
         });
       }

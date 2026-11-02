@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'sdr';
+export type UserRole = 'admin' | 'sdr' | 'ae';
 export type AccountStatus = 'active' | 'disabled';
 export type WorkspaceStatus = 'active' | 'suspended';
 export type MembershipStatus = 'active' | 'suspended' | 'removed';
@@ -46,7 +46,7 @@ export interface Invitation {
   companyName?: string;
   email: string;
   emailNormalized: string;
-  role: 'sdr';
+  role: 'sdr' | 'ae';
   tokenHash: string;
   status: InvitationStatus;
   invitedBy: string;

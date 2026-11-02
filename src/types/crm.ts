@@ -116,6 +116,8 @@ export interface Sequence {
   workspaceId?: string | null;
   createdBy?: string | null;
   createdByUid?: string | null;
+  createdByRole?: 'admin' | 'sdr' | 'ae';
+  targetRole?: 'all' | 'sdr' | 'ae';
   createdAt?: string;
   updatedAt?: string;
 }

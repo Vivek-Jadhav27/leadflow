@@ -63,6 +63,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   // Editable sequence state
   const [seqName, setSeqName] = useState(originalSequence?.name || '');
   const [seqDesc, setSeqDesc] = useState(originalSequence?.description || '');
+  const [seqTargetRole, setSeqTargetRole] = useState<'all' | 'sdr' | 'ae'>(originalSequence?.targetRole || 'all');
   const [steps, setSteps] = useState<SequenceStep[]>(originalSequence?.steps || []);
 
   // Sync if sequence loaded
@@ -70,15 +71,37 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     if (originalSequence) {
       setSeqName(originalSequence.name);
       setSeqDesc(originalSequence.description);
+      setSeqTargetRole(originalSequence.targetRole || 'all');
       setSteps(originalSequence.steps);
     }
   }, [originalSequence]);
 
-  if (!originalSequence) {
+  const isCreator =
+    (user?.uid && originalSequence?.createdByUid === user.uid) ||
+    (user?.email && originalSequence?.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
+  const isAdminCreated =
+    originalSequence?.createdByRole === 'admin' ||
+    !originalSequence?.createdByUid ||
+    originalSequence?.createdBy === 'Workspace Admin' ||
+    (originalSequence?.createdBy && originalSequence.createdBy.toLowerCase().includes('admin'));
+  const matchesTargetRole =
+    !originalSequence?.targetRole ||
+    originalSequence?.targetRole === 'all' ||
+    originalSequence?.targetRole === role;
+
+  const isUnauthorized = !isOwnerOrAdmin && originalSequence && !(isCreator || (isAdminCreated && matchesTargetRole));
+
+  if (!originalSequence || isUnauthorized) {
     return (
       <div className="py-16 text-center space-y-3">
-        <h3 className="text-base font-semibold text-[#33475b]">Sequence Not Found</h3>
-        <p className="text-xs text-slate-500">The requested sequence does not exist or has been removed.</p>
+        <h3 className="text-base font-semibold text-[#33475b]">
+          {isUnauthorized ? 'Access Restricted' : 'Sequence Not Found'}
+        </h3>
+        <p className="text-xs text-slate-500">
+          {isUnauthorized
+            ? 'This sequence was not created by you or designated for your role. Only administrators and authorized role holders may access it.'
+            : 'The requested sequence does not exist or has been removed.'}
+        </p>
         <Link href={ROUTES.SEQUENCES}>
           <Button variant="outline" size="sm" className="border-[#cbd6e2] text-[#33475b]">
             Back to Sequences
@@ -159,6 +182,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
       ...originalSequence,
       name: seqName.trim(),
       description: seqDesc.trim(),
+      targetRole: isOwnerOrAdmin ? seqTargetRole : (originalSequence.targetRole || 'all'),
       steps,
     };
 
@@ -192,7 +216,33 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Target Role Selector for Admin or Badge for Rep */}
+          {isOwnerOrAdmin ? (
+            <div className="flex items-center gap-1.5 text-xs bg-slate-50 px-2 py-1 rounded border border-[#dfe3eb]">
+              <span className="font-semibold text-slate-500">Target Role:</span>
+              <select
+                value={seqTargetRole}
+                onChange={(e) => setSeqTargetRole(e.target.value as 'all' | 'sdr' | 'ae')}
+                className="h-6 rounded border border-[#cbd6e2] px-1.5 text-xs font-semibold text-[#33475b] bg-white focus:outline-none"
+              >
+                <option value="all">Everyone (All)</option>
+                <option value="sdr">SDR Only</option>
+                <option value="ae">AE Only</option>
+              </select>
+            </div>
+          ) : (
+            <span className={`rounded px-2 py-1 text-[10px] font-bold border uppercase tracking-wider ${
+              originalSequence.targetRole === 'ae'
+                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                : (originalSequence.targetRole === 'sdr'
+                  ? 'bg-cyan-50 text-cyan-700 border-cyan-200'
+                  : 'bg-slate-50 text-slate-700 border-slate-200')
+            }`}>
+              Role: {originalSequence.targetRole === 'ae' ? 'AE Only' : (originalSequence.targetRole === 'sdr' ? 'SDR Only' : 'All Roles')}
+            </span>
+          )}
+
           {/* Admin Approve Button */}
           {!isApproved && isOwnerOrAdmin && (
             <Button

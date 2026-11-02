@@ -263,7 +263,10 @@ function InvitationAcceptContent() {
 
             <p className="text-xs text-[#516f90]">
               You have been invited to collaborate as an{' '}
-              <span className="font-bold text-[#ff7a59]">Outbound SDR</span> on LeadFlow.
+              <span className="font-bold text-[#ff7a59]">
+                {inviteInfo.role === 'ae' ? 'Account Executive (AE)' : 'Outbound SDR'}
+              </span>{' '}
+              on LeadFlow.
             </p>
 
             {inviteInfo.companyLinkedinUrl && (

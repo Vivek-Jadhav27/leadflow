@@ -8,6 +8,7 @@ import {
 
 export const adminSignupSchema = z
   .object({
+    fullName: z.string().optional(),
     companyName: z
       .string()
       .min(1, 'Company name is required')
@@ -106,11 +107,15 @@ export const loginSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>;
 
-export const inviteSDRSchema = z.object({
+export const inviteMemberSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Invalid email address').transform(normalizeEmail),
+  role: z.enum(['sdr', 'ae']).default('sdr'),
 });
 
-export type InviteSDRInput = z.infer<typeof inviteSDRSchema>;
+export const inviteSDRSchema = inviteMemberSchema;
+
+export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
+export type InviteSDRInput = InviteMemberInput;
 
 export const resetPasswordSchema = z
   .object({

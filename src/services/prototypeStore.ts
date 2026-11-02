@@ -30,6 +30,15 @@ export const SDR_USER: AuthUser = {
   title: 'Outbound SDR',
 };
 
+export const AE_USER: AuthUser = {
+  uid: '',
+  email: '',
+  displayName: 'AE User',
+  photoURL: null,
+  role: 'ae',
+  title: 'Account Executive (AE)',
+};
+
 export const SEEDED_TEAM_MEMBERS: TeamMember[] = [];
 
 export const SEEDED_SEQUENCES: Sequence[] = [];

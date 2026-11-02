@@ -169,6 +169,20 @@ export const Navbar: React.FC = () => {
               >
                 SDR
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  switchRole('ae');
+                  router.push(ROUTES.DASHBOARD);
+                }}
+                className={`px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ${
+                  user?.role === 'ae'
+                    ? 'bg-[#7c3aed] text-white shadow-xs'
+                    : 'text-[#cbd9f4] hover:text-white'
+                }`}
+              >
+                AE
+              </button>
             </div>
 
             {/* Profile Menu Trigger */}
@@ -178,7 +192,7 @@ export const Navbar: React.FC = () => {
                 className="flex items-center gap-1.5 p-1 rounded hover:bg-[#3d5066] transition-colors"
               >
                 <div className={`h-6 w-6 rounded-full flex items-center justify-center font-bold text-[10px] text-white ${
-                  user?.role === 'admin' ? 'bg-[#ff7a59]' : 'bg-[#0091ae]'
+                  user?.role === 'admin' ? 'bg-[#ff7a59]' : (user?.role === 'ae' ? 'bg-[#7c3aed]' : 'bg-[#0091ae]')
                 }`}>
                   {user?.displayName ? user.displayName.charAt(0) : 'U'}
                 </div>
@@ -187,25 +201,56 @@ export const Navbar: React.FC = () => {
 
               {/* Profile Popover */}
               {profileMenuOpen && (
-                <div className="absolute right-0 mt-1.5 w-56 rounded-lg border border-[#dfe3eb] bg-white p-1 text-[#33475b] shadow-xl z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+                <div className="absolute right-0 mt-1.5 w-60 rounded-lg border border-[#dfe3eb] bg-white p-1 text-[#33475b] shadow-xl z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
                   <div className="p-2 border-b border-[#eaf0f6]">
                     <p className="font-bold text-[#2d3e50] truncate">{user?.displayName || 'User'}</p>
                     <p className="text-[10px] text-[#7c98b6] truncate">{user?.email}</p>
                     <span className="inline-block mt-1 px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider bg-[#f5f8fa] text-[#516f90] border border-[#dfe3eb]">
-                      Role: {user?.role === 'admin' ? 'Workspace Owner' : 'Outbound SDR'}
+                      Role: {user?.role === 'admin' ? 'Workspace Owner' : (user?.role === 'ae' ? 'Account Executive (AE)' : 'Outbound SDR')}
                     </span>
                   </div>
 
                   <div className="py-1">
                     <button
                       onClick={() => {
-                        switchRole(user?.role === 'admin' ? 'sdr' : 'admin');
+                        switchRole('admin');
                         setProfileMenuOpen(false);
                       }}
-                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] flex items-center gap-2 text-xs font-semibold text-[#0091ae]"
+                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] flex items-center justify-between text-xs font-semibold text-[#ff7a59]"
                     >
-                      <UserCheck className="h-3.5 w-3.5" />
-                      <span>Switch to {user?.role === 'admin' ? 'SDR Mode' : 'Admin Mode'}</span>
+                      <span className="flex items-center gap-2">
+                        <UserCheck className="h-3.5 w-3.5" />
+                        <span>Switch to Admin Mode</span>
+                      </span>
+                      {user?.role === 'admin' && <span className="text-[10px] font-bold">✓ Active</span>}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        switchRole('sdr');
+                        setProfileMenuOpen(false);
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] flex items-center justify-between text-xs font-semibold text-[#0091ae]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <UserCheck className="h-3.5 w-3.5" />
+                        <span>Switch to SDR Mode</span>
+                      </span>
+                      {user?.role === 'sdr' && <span className="text-[10px] font-bold">✓ Active</span>}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        switchRole('ae');
+                        setProfileMenuOpen(false);
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] flex items-center justify-between text-xs font-semibold text-[#7c3aed]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <UserCheck className="h-3.5 w-3.5" />
+                        <span>Switch to AE Mode</span>
+                      </span>
+                      {user?.role === 'ae' && <span className="text-[10px] font-bold">✓ Active</span>}
                     </button>
 
                     <Link

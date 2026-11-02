@@ -376,8 +376,8 @@ export function SDRDashboardView() {
       leadLinkedin: lead.linkedinUrl,
       type: newTaskType,
       dueDate: todayStr,
-      assignedToId: user?.uid || 'sdr_current',
-      assignedToName: user?.displayName || user?.email || 'Outbound SDR',
+      assignedToId: user?.uid || (user?.role === 'ae' ? 'ae_current' : 'sdr_current'),
+      assignedToName: user?.displayName || user?.email || (user?.role === 'ae' ? 'Account Executive' : 'Outbound SDR'),
       priority: newTaskPriority,
       status: 'pending',
     });
@@ -448,8 +448,8 @@ export function SDRDashboardView() {
           leadLinkedin: s.linkedinUrl,
           type: isFollowup ? 'followup' : 'linkedin_message',
           dueDate: todayStr,
-          assignedToId: user?.uid || 'sdr_current',
-          assignedToName: user?.displayName || user?.email || 'Outbound SDR',
+          assignedToId: user?.uid || (user?.role === 'ae' ? 'ae_current' : 'sdr_current'),
+          assignedToName: user?.displayName || user?.email || (user?.role === 'ae' ? 'Account Executive' : 'Outbound SDR'),
           priority: 'high',
           status: 'pending',
           stepNumber: s.currentStepNumber,
@@ -467,8 +467,10 @@ export function SDRDashboardView() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-[#e5f5f8] text-[#0091ae]">
-                SDR Dashboard
+              <span className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
+                user?.role === 'ae' ? 'bg-[#f5f3ff] text-[#7c3aed]' : 'bg-[#e5f5f8] text-[#0091ae]'
+              }`}>
+                {user?.role === 'ae' ? 'AE Dashboard' : 'SDR Dashboard'}
               </span>
               <span className="text-xs text-[#7c98b6] flex items-center gap-1 font-medium">
                 <Calendar className="h-3.5 w-3.5 text-[#0091ae]" />
@@ -522,7 +524,7 @@ export function SDRDashboardView() {
               Outreach Active
             </span>
             <span className="text-[#cbd6e2]">|</span>
-            <span>Role: Outbound SDR</span>
+            <span>Role: {user?.role === 'ae' ? 'Account Executive (AE)' : 'Outbound SDR'}</span>
           </div>
         </div>
       </div> */}

@@ -59,12 +59,35 @@ export default function SequencesPage() {
   const [isCreating, setIsCreating] = useState(initialAction === 'new');
   const [newSeqName, setNewSeqName] = useState('');
   const [newSeqDesc, setNewSeqDesc] = useState('');
+  const [newSeqTargetRole, setNewSeqTargetRole] = useState<'all' | 'sdr' | 'ae'>('all');
 
   const filteredSequences = sequences.filter((s) => {
     // 1. Strictly isolate to the current workspace
     if (currentWorkspaceId && s.workspaceId && s.workspaceId !== currentWorkspaceId) {
       return false;
     }
+
+    // 2. Role-based Access Control:
+    // Admin can see everything
+    // Individual (SDR or AE) sees:
+    // - sequences created by them
+    // - sequences created by Admin that target their role (or all roles)
+    if (!isOwnerOrAdmin) {
+      const isCreator =
+        (user?.uid && s.createdByUid === user.uid) ||
+        (user?.email && s.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
+      const isAdminCreated =
+        s.createdByRole === 'admin' ||
+        !s.createdByUid ||
+        s.createdBy === 'Workspace Admin' ||
+        (s.createdBy && s.createdBy.toLowerCase().includes('admin'));
+      const matchesTargetRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === role;
+
+      if (!isCreator && !(isAdminCreated && matchesTargetRole)) {
+        return false;
+      }
+    }
+
     if (filterStatus === 'approved') return s.approvalStatus === 'approved';
     if (filterStatus === 'pending') return s.approvalStatus !== 'approved';
     return true;
@@ -120,6 +143,10 @@ export default function SequencesPage() {
       },
     ];
 
+    const effectiveTargetRole: 'all' | 'sdr' | 'ae' = isOwnerOrAdmin
+      ? newSeqTargetRole
+      : (role === 'ae' ? 'ae' : 'sdr');
+
     const newSeq: Sequence = {
       id: `seq_${Date.now()}`,
       name: newSeqName.trim(),
@@ -131,8 +158,10 @@ export default function SequencesPage() {
       approvedAt: isAdmin ? new Date().toISOString() : undefined,
       enrolledLeadsCount: 0,
       workspaceId: currentWorkspaceId,
-      createdBy: user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
+      createdBy: user?.email || (isAdmin ? 'Workspace Admin' : (role === 'ae' ? 'Account Executive' : 'Outbound SDR')),
       createdByUid: user?.uid || null,
+      createdByRole: isOwnerOrAdmin ? 'admin' : (role === 'ae' ? 'ae' : 'sdr'),
+      targetRole: effectiveTargetRole,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       steps: defaultSteps,
@@ -140,6 +169,9 @@ export default function SequencesPage() {
 
     saveSequence(newSeq);
     setIsCreating(false);
+    setNewSeqName('');
+    setNewSeqDesc('');
+    setNewSeqTargetRole('all');
     setNewSeqName('');
     setNewSeqDesc('');
     toast.success(
@@ -247,6 +279,27 @@ export default function SequencesPage() {
                   <p className="text-[11px] text-slate-500 line-clamp-2 mt-1 leading-relaxed">
                     {seq.description}
                   </p>
+                </div>
+
+                {/* Target Role & Creator Badges */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    seq.targetRole === 'ae'
+                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                      : (seq.targetRole === 'sdr'
+                        ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                        : 'bg-slate-100 text-slate-700 border border-slate-200')
+                  }`}>
+                    {seq.targetRole === 'ae' ? 'AE Only' : (seq.targetRole === 'sdr' ? 'SDR Only' : 'All Roles')}
+                  </span>
+
+                  <span className="px-2 py-0.5 rounded text-[10px] text-slate-500 bg-slate-50 border border-slate-200">
+                    {seq.createdByUid === user?.uid
+                      ? 'Created by You'
+                      : (seq.createdByRole === 'admin' || !seq.createdByUid || seq.createdBy === 'Workspace Admin'
+                        ? 'Admin Cadence'
+                        : `By ${seq.createdBy?.split('@')[0] || 'Member'}`)}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#dfe3eb] text-[11px]">
@@ -372,6 +425,31 @@ export default function SequencesPage() {
                   className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:outline-none resize-none"
                 />
               </div>
+
+              {/* Set Sequence for which role (Option requested for Admin) */}
+              {isOwnerOrAdmin ? (
+                <div className="space-y-1">
+                  <label className="font-semibold text-[#33475b]">
+                    Set Sequence For Which Role (Audience)
+                  </label>
+                  <select
+                    value={newSeqTargetRole}
+                    onChange={(e) => setNewSeqTargetRole(e.target.value as 'all' | 'sdr' | 'ae')}
+                    className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:outline-none focus:ring-1 focus:ring-[#ff7a59]"
+                  >
+                    <option value="all">Everyone (All Roles: SDR &amp; AE)</option>
+                    <option value="sdr">SDR Only (Sales Development Representatives)</option>
+                    <option value="ae">AE Only (Account Executives)</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500">
+                    Controls which role will see and execute this sequence.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-2.5 rounded bg-[#f0f9fb] border border-[#cbd8eb] text-[11px] text-[#0091ae]">
+                  Created by you as <strong className="uppercase">{role}</strong>. Only visible to you and Workspace Administrators.
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2 border-t border-[#dfe3eb]">
                 <Button variant="outline" size="sm" type="button" onClick={() => setIsCreating(false)} className="border-[#cbd6e2] text-[#33475b]">

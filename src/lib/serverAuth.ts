@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
-import { UserProfile, WorkspaceMember } from '@/types/auth';
+import { UserProfile, WorkspaceMember, UserRole } from '@/types/auth';
 
 export interface AuthenticatedServerContext {
   uid: string;
   email: string;
   profile: UserProfile | null;
-  role: 'admin' | 'sdr';
+  role: UserRole;
   workspaceId: string | null;
   memberRecord: WorkspaceMember | null;
 }
@@ -56,7 +56,7 @@ export async function authenticateServerRequest(
       null;
 
     let memberRecord: WorkspaceMember | null = null;
-    let role: 'admin' | 'sdr' = (profile?.role as 'admin' | 'sdr') || 'sdr';
+    let role: UserRole = (profile?.role as UserRole) || 'sdr';
 
     if (workspaceId) {
       const memberDoc = await adminDb

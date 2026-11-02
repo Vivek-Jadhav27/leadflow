@@ -21,6 +21,7 @@ interface AuthContextType {
   selectWorkspace: (workspaceId: string) => Promise<void>;
   login: (email: string, password: string, rememberMe?: boolean) => Promise<boolean>;
   adminSignUp: (params: {
+    fullName?: string;
     companyName: string;
     companyLinkedinUrl: string;
     email: string;
@@ -40,6 +41,7 @@ interface AuthContextType {
   // Fallback demo helpers preserved for decision canvas or testing
   loginAsAdmin: () => void;
   loginAsSDR: () => void;
+  loginAsAE: () => void;
   switchRole: (role: UserRole) => void;
   setRole: (role: UserRole) => void;
   signUp: (fullName: string, email: string, password: string) => Promise<void>;
@@ -260,12 +262,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     login('sdr@leadflow.io', 'Sdr12345!').catch(() => {});
   };
 
+  const loginAsAE = () => {
+    login('ae@leadflow.io', 'Ae12345!').catch(() => {
+      // If demo account is not registered in Firebase, update client auth user
+      setUser((prev) => ({
+        uid: prev?.uid || 'demo_ae_user',
+        email: prev?.email || 'ae@leadflow.io',
+        displayName: prev?.displayName || 'AE User',
+        photoURL: null,
+        role: 'ae',
+        title: 'Account Executive (AE)',
+        workspaceId: currentWorkspace?.workspaceId || prev?.workspaceId,
+        companyName: currentWorkspace?.companyName || prev?.companyName,
+      }));
+    });
+  };
+
   const switchRole = (r: UserRole) => {
     if (user) {
-      setUser((prev) => (prev ? { ...prev, role: r } : null));
+      setUser((prev) => (prev ? {
+        ...prev,
+        role: r,
+        title: r === 'admin' ? 'Workspace Owner' : (r === 'ae' ? 'Account Executive (AE)' : 'Outbound SDR')
+      } : null));
+    } else {
+      if (r === 'admin') loginAsAdmin();
+      else if (r === 'ae') loginAsAE();
+      else loginAsSDR();
     }
-    if (r === 'admin') loginAsAdmin();
-    else loginAsSDR();
   };
 
   const setRole = (r: UserRole) => {
@@ -302,6 +326,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         refreshUser,
         loginAsAdmin,
         loginAsSDR,
+        loginAsAE,
         switchRole,
         setRole,
         signUp,

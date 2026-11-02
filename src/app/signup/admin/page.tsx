@@ -35,6 +35,7 @@ export default function AdminSignupPage() {
     }
   }, [isAuthenticated, loading, router]);
 
+  const [fullName, setFullName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [companyLinkedinUrl, setCompanyLinkedinUrl] = useState('');
   const [email, setEmail] = useState('');
@@ -49,6 +50,7 @@ export default function AdminSignupPage() {
   const [serverError, setServerError] = useState('');
 
   // Form field IDs
+  const fullNameId = useId();
   const companyNameId = useId();
   const linkedinId = useId();
   const emailId = useId();
@@ -83,6 +85,7 @@ export default function AdminSignupPage() {
     try {
       const normalizedLinkedin = linkedinValidation.normalizedUrl || companyLinkedinUrl.trim();
       await adminSignUp({
+        fullName: fullName.trim() || undefined,
         companyName: companyName.trim(),
         companyLinkedinUrl: normalizedLinkedin,
         email: email.trim(),
@@ -139,6 +142,24 @@ export default function AdminSignupPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* 0. Full Name */}
+            <div>
+              <label htmlFor={fullNameId} className="block text-xs font-semibold text-[#33475b] mb-1.5">
+                Your Full Name
+              </label>
+              <div className="relative">
+                <input
+                  id={fullNameId}
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="e.g. Abhay Singh Rathod"
+                  disabled={isSubmitting}
+                  className="w-full px-3 py-2 text-xs rounded-md border border-[#cbd6e2] bg-white focus:outline-none focus:border-[#0091ae] focus:ring-1 focus:ring-[#0091ae] transition-colors"
+                />
+              </div>
+            </div>
+
             {/* 1. Company Name */}
             <div>
               <label htmlFor={companyNameId} className="block text-xs font-semibold text-[#33475b] mb-1.5">

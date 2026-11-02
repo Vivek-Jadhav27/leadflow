@@ -138,7 +138,7 @@ export default function DashboardOverviewPage() {
                   className="flex items-center gap-2 px-4 py-2.5 rounded-md font-semibold text-xs text-white bg-[#ff7a59] hover:bg-[#e66343] transition-all shadow-xs cursor-pointer"
                 >
                   <UserPlus className="h-4 w-4" />
-                  <span>Invite your first SDR</span>
+                  <span>Invite Team Member (SDR / AE)</span>
                 </button>
 
                 <Link
@@ -265,7 +265,7 @@ export default function DashboardOverviewPage() {
             Your sales team workspace is ready
           </h3>
           <p className="text-xs text-[#516f90] max-w-md mx-auto mb-6">
-            Start by inviting your Sales Development Representatives. Each invited member receives a secure single-use link to join your company&apos;s workspace.
+            Start by inviting your SDRs or Account Executives (AEs). Each invited member receives a secure single-use link to join your company&apos;s workspace.
           </p>
 
           <button

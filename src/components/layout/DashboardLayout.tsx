@@ -68,8 +68,12 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
             <span className="font-medium text-[#2d3e50] max-w-[180px] lg:max-w-[260px] truncate">
               {user?.email}
             </span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-[#e5f5f8] text-[#0091ae]">
-              {user?.role === 'admin' ? 'ADMIN' : 'SDR'}
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+              user?.role === 'admin'
+                ? 'bg-[#fff5f2] text-[#ff7a59]'
+                : (user?.role === 'ae' ? 'bg-[#f5f3ff] text-[#7c3aed]' : 'bg-[#e5f5f8] text-[#0091ae]')
+            }`}>
+              {user?.role === 'admin' ? 'ADMIN' : (user?.role === 'ae' ? 'AE' : 'SDR')}
             </span>
           </div>
 

@@ -43,14 +43,19 @@ export async function GET(req: NextRequest) {
           return;
         }
 
-        const name = data.name || (data.email ? data.email.split('@')[0] : 'SDR Member');
+        const rawName = data.name || (data.email ? data.email.split('@')[0] : 'Team Member');
+        const formattedName = rawName.includes('@')
+          ? rawName.split('@')[0].replace(/[._\-0-9]+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+          : rawName;
+        const name = formattedName.trim() || 'Team Member';
         const email = data.email || '';
+        const roleDisplay = (roleStr === 'ae' || roleStr.includes('ae')) ? 'Account Executive' : 'Outbound SDR';
         sdrMap.set(doc.id, {
           id: doc.id,
           name,
           email,
-          role: 'Outbound SDR',
-          initials: (name || email || 'S').slice(0, 2).toUpperCase(),
+          role: roleDisplay,
+          initials: (name || email || 'T').slice(0, 2).toUpperCase(),
           status: data.status === 'suspended' ? 'away' : 'active',
           assignedLeadsCount: 0,
           activeSequencesCount: 0,
@@ -82,15 +87,20 @@ export async function GET(req: NextRequest) {
             // Fetch user info for name/email
             const uDoc = await adminDb.collection('users').doc(doc.id).get();
             const uData = uDoc.exists ? uDoc.data() : null;
-            const name = uData?.name || (uData?.email ? uData.email.split('@')[0] : 'SDR Member');
-            const email = uData?.email || '';
+            const rawName = uData?.name || mData?.name || (uData?.email ? uData.email.split('@')[0] : 'Team Member');
+            const formattedName = rawName.includes('@')
+              ? rawName.split('@')[0].replace(/[._\-0-9]+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+              : rawName;
+            const name = formattedName.trim() || 'Team Member';
+            const email = uData?.email || mData?.email || '';
+            const roleDisplay = (roleStr === 'ae' || roleStr.includes('ae')) ? 'Account Executive' : 'Outbound SDR';
 
             sdrMap.set(doc.id, {
               id: doc.id,
               name,
               email,
-              role: 'Outbound SDR',
-              initials: (name || email || 'S').slice(0, 2).toUpperCase(),
+              role: roleDisplay,
+              initials: (name || email || 'T').slice(0, 2).toUpperCase(),
               status: mData.status === 'suspended' ? 'away' : 'active',
               assignedLeadsCount: 0,
               activeSequencesCount: 0,

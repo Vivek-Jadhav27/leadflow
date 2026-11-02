@@ -28,7 +28,7 @@ import { ROUTES } from '@/constants/routes';
 
 interface MemberItem {
   uid: string;
-  role: 'admin' | 'sdr';
+  role: 'admin' | 'sdr' | 'ae';
   status: 'active' | 'suspended' | 'removed';
   joinedAt: string;
   isOwner: boolean;
@@ -370,8 +370,10 @@ export default function WorkspaceTeamPage() {
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                             m.role === 'admin'
-                              ? 'bg-[#e5f5f8] text-[#0091ae]'
-                              : 'bg-slate-100 text-slate-700'
+                              ? 'bg-[#fff5f2] text-[#ff7a59] border border-[#ff7a59]/30'
+                              : (m.role === 'ae'
+                                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                : 'bg-[#e5f5f8] text-[#0091ae] border border-[#0091ae]/30')
                           }`}
                         >
                           {m.role}
@@ -488,6 +490,7 @@ export default function WorkspaceTeamPage() {
                 <thead className="bg-[#f8fafc] text-[#516f90] border-b border-[#edf1f5] text-[11px] font-semibold uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-3">Invited Email</th>
+                    <th className="px-4 py-3">Role</th>
                     <th className="px-4 py-3">Sent Date</th>
                     <th className="px-4 py-3">Expires At</th>
                     <th className="px-4 py-3">Status</th>
@@ -505,8 +508,19 @@ export default function WorkspaceTeamPage() {
                           <div className="flex items-center gap-2">
                             <Mail className="h-3.5 w-3.5 text-[#7c98b6]" />
                             <span>{inv.email}</span>
-                            </div>
+                          </div>
+                        </td>
 
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              inv.role === 'ae'
+                                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                : 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                            }`}
+                          >
+                            {inv.role || 'sdr'}
+                          </span>
                         </td>
 
                         <td className="px-4 py-3.5 text-[11px] text-[#516f90]">

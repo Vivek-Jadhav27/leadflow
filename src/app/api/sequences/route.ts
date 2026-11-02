@@ -41,17 +41,29 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get('workspaceId') ||
       null;
 
-    if (!resolvedWorkspaceId && token) {
+    let callerUid: string | null = null;
+    let callerEmail: string | null = null;
+    let callerRole: string = 'admin';
+
+    if (token) {
       try {
         const decoded = await adminAuth.verifyIdToken(token);
         if (decoded?.uid) {
+          callerUid = decoded.uid;
+          callerEmail = decoded.email || null;
           const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
-            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
-          } else {
+          if (userDoc.exists) {
+            const uData = userDoc.data();
+            callerRole = uData?.role || 'sdr';
+            if (!resolvedWorkspaceId && uData?.currentWorkspaceId) {
+              resolvedWorkspaceId = uData.currentWorkspaceId;
+            }
+          }
+          if (!resolvedWorkspaceId) {
             const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
             if (!ownedWsSnap.empty) {
               resolvedWorkspaceId = ownedWsSnap.docs[0].id;
+              callerRole = 'admin';
             }
           }
         }
@@ -64,10 +76,27 @@ export async function GET(req: NextRequest) {
     }
 
     const snapshot = await q.get();
-    const sequences = snapshot.docs.map((doc: any) => ({
+    let sequences = snapshot.docs.map((doc: any) => ({
       id: doc.id,
       ...doc.data(),
     }));
+
+    // If caller is not admin (SDR or AE), enforce access rules:
+    // Only sequences created by them, or created by admin and matching their targetRole
+    if (callerRole && callerRole !== 'admin') {
+      sequences = sequences.filter((s: any) => {
+        const isCreator =
+          (callerUid && s.createdByUid === callerUid) ||
+          (callerEmail && s.createdBy?.toLowerCase().trim() === callerEmail.toLowerCase().trim());
+        const isAdminCreated =
+          s.createdByRole === 'admin' ||
+          !s.createdByUid ||
+          s.createdBy === 'Workspace Admin' ||
+          (s.createdBy && s.createdBy.toLowerCase().includes('admin'));
+        const matchesTargetRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === callerRole;
+        return isCreator || (isAdminCreated && matchesTargetRole);
+      });
+    }
 
     return NextResponse.json(
       {
@@ -147,6 +176,8 @@ export async function POST(req: NextRequest) {
       workspaceId: resolvedWorkspaceId || 'default_workspace',
       createdBy: author,
       createdByUid: authorUid,
+      createdByRole: body.createdByRole || 'admin',
+      targetRole: body.targetRole || 'all',
       enrolledLeadsCount: body.enrolledLeadsCount || 0,
       createdAt: body.createdAt || now,
       updatedAt: now,

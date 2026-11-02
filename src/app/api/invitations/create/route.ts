@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
     }
 
     const emailNorm = normalizeEmail(parseResult.data.email);
+    const assignedRole = parseResult.data.role === 'ae' ? 'ae' : 'sdr';
 
     // 1. Check if user with this email is already an active member in this workspace
     const existingUsers = await adminDb
@@ -134,7 +135,7 @@ export async function POST(req: NextRequest) {
       companyName,
       email: emailNorm,
       emailNormalized: emailNorm,
-      role: 'sdr' as const,
+      role: assignedRole,
       tokenHash,
       status: 'pending' as const,
       invitedBy: uid,
@@ -156,7 +157,7 @@ export async function POST(req: NextRequest) {
       workspaceId,
       targetId: invitationId,
       timestamp: now.toISOString(),
-      details: { email: emailNorm, role: 'sdr' },
+      details: { email: emailNorm, role: assignedRole },
     });
 
     return NextResponse.json({

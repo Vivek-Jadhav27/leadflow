@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateServerRequest } from '@/lib/serverAuth';
-import { adminDb } from '@/lib/firebaseAdmin';
+import { adminDb, adminAuth } from '@/lib/firebaseAdmin';
 
 // GET: List workspace members and invitations
 export async function GET(req: NextRequest) {
@@ -33,11 +33,42 @@ export async function GET(req: NextRequest) {
       .collection('members')
       .get();
 
+    const companyNameNorm = (wsData?.companyName || '').toLowerCase().trim();
+
     const members = [];
     for (const doc of membersSnap.docs) {
       const data = doc.data();
       const userDoc = await adminDb.collection('users').doc(doc.id).get();
       const userData = userDoc.exists ? userDoc.data() : null;
+
+      // Resolve human member name (avoiding company name like "TestGrid" as user's name)
+      let resolvedName = userData?.name || data?.name || null;
+
+      if (!resolvedName || (companyNameNorm && resolvedName.toLowerCase().trim() === companyNameNorm)) {
+        try {
+          const authRecord = await adminAuth.getUser(doc.id);
+          if (authRecord?.displayName && authRecord.displayName.toLowerCase().trim() !== companyNameNorm) {
+            resolvedName = authRecord.displayName;
+          }
+        } catch {}
+      }
+
+      if (!resolvedName || (companyNameNorm && resolvedName.toLowerCase().trim() === companyNameNorm)) {
+        const rawEmail = userData?.email || data?.email || '';
+        const prefix = rawEmail.split('@')[0] || '';
+        const formatted = prefix
+          .replace(/([a-z])([A-Z])/g, '$1 $2')
+          .replace(/[._\-0-9]+/g, ' ')
+          .trim()
+          .replace(/\b\w/g, (c: string) => c.toUpperCase());
+        resolvedName = formatted || 'Team Member';
+      }
+
+      // Self-heal stale Firestore record if it was stuck with company name
+      if (userData?.name && companyNameNorm && userData.name.toLowerCase().trim() === companyNameNorm && resolvedName !== userData.name) {
+        adminDb.collection('users').doc(doc.id).set({ name: resolvedName }, { merge: true }).catch(() => {});
+        adminDb.collection('workspaces').doc(workspaceId).collection('members').doc(doc.id).set({ name: resolvedName }, { merge: true }).catch(() => {});
+      }
 
       members.push({
         uid: doc.id,
@@ -46,8 +77,8 @@ export async function GET(req: NextRequest) {
         joinedAt: data.joinedAt || '',
         isOwner: doc.id === ownerId,
         user: {
-          name: userData?.name || userData?.email?.split('@')[0] || 'Unknown',
-          email: userData?.email || '',
+          name: resolvedName,
+          email: userData?.email || data?.email || '',
         },
       });
     }
