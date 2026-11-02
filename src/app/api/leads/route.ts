@@ -62,15 +62,24 @@ export async function GET(req: NextRequest) {
         : isFirebaseAdminConfigured;
 
     let firestoreLeads: any[] = [];
-    const workspaceId =
+    const workspaceIdParam =
       req.headers.get('x-workspace-id') ||
       req.nextUrl.searchParams.get('workspaceId');
+
+    let authContext: any = null;
+    try {
+      authContext = await authenticateServerRequest(req);
+    } catch (authErr) {
+      console.warn('[API /leads GET] Auth check warning:', authErr);
+    }
+
+    const resolvedWorkspaceId = workspaceIdParam || authContext?.workspaceId || null;
 
     if (isAdminReady && adminDb) {
       try {
         let q: any = adminDb.collection('leads');
-        if (workspaceId) {
-          q = q.where('workspaceId', '==', workspaceId);
+        if (resolvedWorkspaceId) {
+          q = q.where('workspaceId', '==', resolvedWorkspaceId);
         }
         const snap = await q.get();
         if (!snap.empty) {
@@ -91,33 +100,24 @@ export async function GET(req: NextRequest) {
     firestoreLeads.forEach((l) => leadMap.set(l.id, l));
     const merged = Array.from(leadMap.values());
 
-    // Role-based Access Control:
-    // 1. SDR can see ONLY ASSIGNED LEADS
-    // 2. Admin can see ONLY their workspace leads (captured by admin or sdr members)
-    let finalLeads = merged;
-    try {
-      const authContext = await authenticateServerRequest(req);
-      if (authContext) {
-        if (authContext.role === 'sdr') {
-          const sdrUid = authContext.uid;
-          const sdrEmail = (authContext.email || '').toLowerCase().trim();
-          finalLeads = merged.filter((l) => {
-            return (
-              (l.assignedToId && l.assignedToId === sdrUid) ||
-              (l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === sdrEmail)
-            );
-          });
-        } else if (authContext.role === 'admin') {
-          const wsId = authContext.workspaceId || workspaceId;
-          if (wsId) {
-            finalLeads = merged.filter((l) => !l.workspaceId || l.workspaceId === wsId);
-          }
-        }
-      } else if (workspaceId) {
-        finalLeads = merged.filter((l) => !l.workspaceId || l.workspaceId === workspaceId);
+    // Role-based Access Control & Strict Workspace Scoping:
+    // 1. Leads must match the active workspace (if resolved)
+    let finalLeads = resolvedWorkspaceId
+      ? merged.filter((l) => l.workspaceId === resolvedWorkspaceId)
+      : merged;
+
+    if (authContext) {
+      if (authContext.role === 'sdr') {
+        const sdrUid = authContext.uid;
+        const sdrEmail = (authContext.email || '').toLowerCase().trim();
+        finalLeads = finalLeads.filter((l) => {
+          return (
+            (l.assignedToId && l.assignedToId === sdrUid) ||
+            (l.capturedByUid && l.capturedByUid === sdrUid) ||
+            (l.assignedToEmail && l.assignedToEmail.toLowerCase().trim() === sdrEmail)
+          );
+        });
       }
-    } catch (authErr) {
-      console.warn('[API /leads GET] Auth check warning:', authErr);
     }
 
     return NextResponse.json(
@@ -185,6 +185,12 @@ export async function POST(req: NextRequest) {
           const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
           if (userDoc.exists) {
             resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId || null;
+          }
+          if (!resolvedWorkspaceId) {
+            const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
+            if (!ownedWsSnap.empty) {
+              resolvedWorkspaceId = ownedWsSnap.docs[0].id;
+            }
           }
         }
       } catch {

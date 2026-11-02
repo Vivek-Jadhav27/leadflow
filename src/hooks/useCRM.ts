@@ -12,23 +12,27 @@ import {
   EnrichedData,
 } from '@/types/crm';
 import { prototypeStore } from '@/services/prototypeStore';
+import { useAuthContext } from '@/context/AuthProvider';
 
 export function useCRM() {
-  const [leads, setLeads] = useState<Lead[]>(() => prototypeStore.getLeads());
-  const [sequences, setSequences] = useState<Sequence[]>(() => prototypeStore.getSequences());
+  const { currentWorkspace, user, isAdmin } = useAuthContext();
+  const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
+
+  const [leads, setLeads] = useState<Lead[]>(() => prototypeStore.getLeads(currentWorkspaceId || undefined));
+  const [sequences, setSequences] = useState<Sequence[]>(() => prototypeStore.getSequences(currentWorkspaceId || undefined));
   const [tasks, setTasks] = useState<Task[]>(() => prototypeStore.getTasks());
   const [activities, setActivities] = useState<ActivityEvent[]>(() => prototypeStore.getActivityEvents());
   const [team, setTeam] = useState<TeamMember[]>(() => prototypeStore.getTeamMembers());
   const [settings, setSettings] = useState<WorkspaceSettings>(() => prototypeStore.getSettings());
 
   const refreshAll = useCallback(() => {
-    setLeads(prototypeStore.getLeads());
-    setSequences(prototypeStore.getSequences());
+    setLeads(prototypeStore.getLeads(currentWorkspaceId || undefined));
+    setSequences(prototypeStore.getSequences(currentWorkspaceId || undefined));
     setTasks(prototypeStore.getTasks());
     setActivities(prototypeStore.getActivityEvents());
     setTeam(prototypeStore.getTeamMembers());
     setSettings(prototypeStore.getSettings());
-  }, []);
+  }, [currentWorkspaceId]);
 
   // Subscribe to prototype store changes
   useEffect(() => {
@@ -39,34 +43,46 @@ export function useCRM() {
     return unsubscribe;
   }, [refreshAll]);
 
-  // Synchronize incoming leads & sequences from Firestore on initial mount only
+  // Synchronize incoming leads & sequences from Firestore on initial mount or when workspace changes
   useEffect(() => {
     let isMounted = true;
 
     const loadCloudData = async () => {
       try {
+        const headers: Record<string, string> = {};
+        let leadsUrl = '/api/leads';
+        let seqUrl = '/api/sequences';
+        let teamUrl = '/api/team';
+
+        if (currentWorkspaceId) {
+          headers['x-workspace-id'] = currentWorkspaceId;
+          leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+          seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+          teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+        }
+
         // 1. Fetch leads from Firestore
-        const leadsRes = await fetch('/api/leads');
+        const leadsRes = await fetch(leadsUrl, { headers });
         if (leadsRes.ok) {
           const data = await leadsRes.json();
           if (data.leads && Array.isArray(data.leads) && isMounted) {
-            prototypeStore.syncIncomingLeads(data.leads);
+            prototypeStore.syncIncomingLeads(data.leads, currentWorkspaceId || undefined);
             refreshAll();
           }
         }
 
         // 2. Fetch sequences from Firestore
-        const seqRes = await fetch('/api/sequences');
+        const seqRes = await fetch(seqUrl, { headers });
         if (seqRes.ok) {
           const data = await seqRes.json();
           if (data.sequences && Array.isArray(data.sequences) && isMounted) {
-            prototypeStore.syncIncomingSequences(data.sequences);
+            prototypeStore.syncIncomingSequences(data.sequences, currentWorkspaceId || undefined);
             refreshAll();
           }
         }
 
         // 3. Fetch SDR team members from Firestore
-        const teamRes = await fetch('/api/team');
+        const teamRes = await fetch(teamUrl, { headers });
         if (teamRes.ok) {
           const data = await teamRes.json();
           if (data.team && Array.isArray(data.team) && isMounted) {
@@ -84,7 +100,7 @@ export function useCRM() {
     return () => {
       isMounted = false;
     };
-  }, [refreshAll]);
+  }, [currentWorkspaceId, refreshAll]);
 
   // Operational metrics matching decision tree
   const stats = useMemo(() => {
@@ -135,12 +151,22 @@ export function useCRM() {
   const createLead = useCallback(
     (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
-        const lead = prototypeStore.createLead(input);
+        const targetWorkspaceId = input.workspaceId || currentWorkspaceId;
+        const leadPayload = {
+          ...input,
+          workspaceId: targetWorkspaceId,
+          capturedBy: input.capturedBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
+          capturedByUid: input.capturedByUid || user?.uid || null,
+        };
+        const lead = prototypeStore.createLead(leadPayload);
         refreshAll();
         // Persist to Firestore via API
         fetch('/api/leads', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
+          },
           body: JSON.stringify(lead),
         }).catch((e) => console.warn('Firestore sync warning for lead', e));
         toast.success(`Lead captured: ${lead.firstName} ${lead.lastName}`);
@@ -150,7 +176,7 @@ export function useCRM() {
         return undefined;
       }
     },
-    [refreshAll]
+    [currentWorkspaceId, user, isAdmin, refreshAll]
   );
 
   const updateLead = useCallback(
@@ -383,18 +409,28 @@ export function useCRM() {
   // Sequence actions
   const saveSequence = useCallback(
     (seq: Sequence) => {
-      const saved = prototypeStore.saveSequence(seq);
+      const targetWorkspaceId = seq.workspaceId || currentWorkspaceId;
+      const sequencePayload: Sequence = {
+        ...seq,
+        workspaceId: targetWorkspaceId,
+        createdBy: seq.createdBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
+        createdByUid: seq.createdByUid || user?.uid || null,
+      };
+      const saved = prototypeStore.saveSequence(sequencePayload);
       refreshAll();
       // Persist to Firestore via API
       fetch('/api/sequences', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
+        },
         body: JSON.stringify(saved),
       }).catch((e) => console.warn('Firestore sync warning for sequence', e));
       toast.success(`Sequence "${saved.name}" saved`);
       return saved;
     },
-    [refreshAll]
+    [currentWorkspaceId, user, isAdmin, refreshAll]
   );
 
   const approveSequence = useCallback(
@@ -515,12 +551,19 @@ export function useCRM() {
 
   const syncToFirestore = useCallback(async () => {
     try {
-      const curLeads = prototypeStore.getLeads();
-      const curSeqs = prototypeStore.getSequences();
+      const curLeads = prototypeStore.getLeads(currentWorkspaceId || undefined);
+      const curSeqs = prototypeStore.getSequences(currentWorkspaceId || undefined);
       const res = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leads: curLeads, sequences: curSeqs }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(currentWorkspaceId ? { 'x-workspace-id': currentWorkspaceId } : {}),
+        },
+        body: JSON.stringify({
+          leads: curLeads,
+          sequences: curSeqs,
+          workspaceId: currentWorkspaceId,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -534,7 +577,7 @@ export function useCRM() {
       toast.error('Sync failed: ' + (e?.message || 'Network error'));
       return false;
     }
-  }, []);
+  }, [currentWorkspaceId]);
 
   const resetToDefaults = useCallback(() => {
     prototypeStore.resetToDefaults();
@@ -544,14 +587,26 @@ export function useCRM() {
   const bulkCreateLeads = useCallback(
     async (
       leadsToCreate: Array<Partial<Lead>>,
-      defaults?: { defaultSequenceId?: string; defaultAssignedToId?: string; defaultAssignedToName?: string }
+      defaults?: { defaultSequenceId?: string; defaultAssignedToId?: string; defaultAssignedToName?: string; workspaceId?: string }
     ) => {
       try {
+        const targetWorkspaceId = defaults?.workspaceId || currentWorkspaceId;
+        const leadsWithWorkspace = leadsToCreate.map((l) => ({
+          ...l,
+          workspaceId: l.workspaceId || targetWorkspaceId,
+          capturedBy: l.capturedBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
+          capturedByUid: l.capturedByUid || user?.uid || null,
+        }));
+
         const res = await fetch('/api/leads/bulk', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
+          },
           body: JSON.stringify({
-            leads: leadsToCreate,
+            leads: leadsWithWorkspace,
+            workspaceId: targetWorkspaceId,
             ...defaults,
           }),
         });
@@ -573,7 +628,7 @@ export function useCRM() {
         throw err;
       }
     },
-    [refreshAll]
+    [currentWorkspaceId, user, isAdmin, refreshAll]
   );
 
   const addActivityEvent = useCallback(

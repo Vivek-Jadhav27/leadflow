@@ -86,19 +86,28 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let workspaceId = req.headers.get('x-workspace-id') || rawWorkspaceId || 'default_workspace';
+    let workspaceId = req.headers.get('x-workspace-id') || rawWorkspaceId || null;
 
     if (token) {
       try {
         const decoded = await adminAuth.verifyIdToken(token);
         if (decoded?.uid) {
-          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists) {
-            workspaceId = userDoc.data()?.currentWorkspaceId || workspaceId;
+          if (!workspaceId) {
+            const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
+            if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
+              workspaceId = userDoc.data()?.currentWorkspaceId;
+            } else {
+              const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
+              if (!ownedWsSnap.empty) {
+                workspaceId = ownedWsSnap.docs[0].id;
+              }
+            }
           }
         }
       } catch {}
     }
+
+    workspaceId = workspaceId || 'default_workspace';
 
     const batch = adminDb.batch();
     let writeCount = 0;

@@ -118,8 +118,9 @@ class PrototypeStore {
   }
 
   // --- Leads Operations ---
-  public getLeads(): Lead[] {
-    return [...this.db.leads];
+  public getLeads(workspaceId?: string): Lead[] {
+    if (!workspaceId) return [...this.db.leads];
+    return this.db.leads.filter((l) => !l.workspaceId || l.workspaceId === workspaceId);
   }
 
   public getLeadById(id: string): Lead | undefined {
@@ -193,14 +194,18 @@ class PrototypeStore {
     return added;
   }
 
-  public syncIncomingLeads(incoming: any[]): number {
+  public syncIncomingLeads(incoming: any[], workspaceId?: string): number {
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
     let modifiedCount = 0;
 
     const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
 
-    for (const item of incoming) {
-      if (!item.id || this.deletedLeadIds.has(item.id)) continue;
+    for (const rawItem of incoming) {
+      if (!rawItem.id || this.deletedLeadIds.has(rawItem.id)) continue;
+      const item = {
+        ...rawItem,
+        workspaceId: rawItem.workspaceId || workspaceId || null,
+      };
       const itemUrl = normUrl(item.linkedinUrl);
 
       const existingIndex = this.db.leads.findIndex(
@@ -317,10 +322,14 @@ class PrototypeStore {
     this.persistAndNotify();
   }
 
-  public syncIncomingSequences(incoming: Sequence[]): number {
+  public syncIncomingSequences(incoming: Sequence[], workspaceId?: string): number {
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
     let addedCount = 0;
-    for (const item of incoming) {
+    for (const rawItem of incoming) {
+      const item = {
+        ...rawItem,
+        workspaceId: rawItem.workspaceId || workspaceId || null,
+      };
       const idx = this.db.sequences.findIndex((s) => s.id === item.id);
       if (idx === -1) {
         this.db.sequences.push(item);
@@ -693,12 +702,14 @@ class PrototypeStore {
   }
 
   // --- Sequences Operations ---
-  public getSequences(): Sequence[] {
-    return this.db.sequences.map((s) => ({
+  public getSequences(workspaceId?: string): Sequence[] {
+    const list = this.db.sequences.map((s) => ({
       ...s,
       approvalStatus:
         s.approvalStatus || (s.status === 'active' && s.approvedBy ? 'approved' : 'pending'),
     }));
+    if (!workspaceId) return list;
+    return list.filter((s) => !s.workspaceId || s.workspaceId === workspaceId);
   }
 
   public getSequenceById(id: string): Sequence | undefined {

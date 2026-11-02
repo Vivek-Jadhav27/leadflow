@@ -87,8 +87,13 @@ export async function POST(req: NextRequest) {
         }
         if (!resolvedWorkspaceId && decoded?.uid) {
           const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists) {
-            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId || null;
+          if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
+            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
+          } else {
+            const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
+            if (!ownedWsSnap.empty) {
+              resolvedWorkspaceId = ownedWsSnap.docs[0].id;
+            }
           }
         }
       } catch {}

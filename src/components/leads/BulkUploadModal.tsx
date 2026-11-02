@@ -43,8 +43,9 @@ export interface ParsedLeadRow {
 
 export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUploadModalProps) {
   const { bulkCreateLeads } = useCRM();
-  const { user, isAdmin } = useAuthContext();
+  const { user, isAdmin, currentWorkspace } = useAuthContext();
 
+  const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
   const isSdr = !isAdmin && !!user;
   const currentSdrName = user?.displayName || user?.email?.split('@')[0] || 'Outbound SDR';
   const currentSdrEmail = user?.email || '';
@@ -286,6 +287,7 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         assignedToId: finalAssigneeId,
         assignedToName: finalAssigneeName,
         assignedToEmail: finalAssigneeEmail,
+        workspaceId: currentWorkspaceId,
         capturedBy: user?.email || 'bulk_csv_import',
         capturedByUid: user?.uid || null,
         notes: 'Imported via CSV',
@@ -295,6 +297,7 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         defaultSequenceId: selectedSequenceId || undefined,
         defaultAssignedToId: finalAssigneeId || undefined,
         defaultAssignedToName: finalAssigneeName || undefined,
+        workspaceId: currentWorkspaceId || undefined,
       });
 
       // Reset and close

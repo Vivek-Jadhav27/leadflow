@@ -113,6 +113,9 @@ export interface Sequence {
   approvedBy?: string;
   approvedAt?: string;
   enrolledLeadsCount?: number;
+  workspaceId?: string | null;
+  createdBy?: string | null;
+  createdByUid?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

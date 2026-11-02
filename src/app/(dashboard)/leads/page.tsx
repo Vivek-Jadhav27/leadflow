@@ -150,20 +150,23 @@ export default function LeadsPage() {
   const filteredLeads = useMemo(() => {
     return leads
       .filter((lead) => {
-        // Access Control:
-        // 1. SDR can see ONLY ASSIGNED LEADS
+        // 1. Strict Workspace Isolation: lead must belong to active workspace
+        if (currentWorkspace?.workspaceId) {
+          if (lead.workspaceId && lead.workspaceId !== currentWorkspace.workspaceId) {
+            return false;
+          }
+        }
+
+        // 2. Role-based Access Control:
+        // SDR can see ONLY their assigned leads within this workspace
         if (!isAdmin) {
           const userEmailNorm = (user?.email || '').toLowerCase().trim();
           const leadAssignedEmail = (lead.assignedToEmail || '').toLowerCase().trim();
           const isAssigned =
             (user?.uid && lead.assignedToId === user.uid) ||
+            (user?.uid && lead.capturedByUid === user.uid) ||
             (userEmailNorm && leadAssignedEmail && leadAssignedEmail === userEmailNorm);
           if (!isAssigned) return false;
-        } else {
-          // 2. Admin can see ONLY their workspace leads (captured by admin or sdr members)
-          if (currentWorkspace?.workspaceId && lead.workspaceId && lead.workspaceId !== currentWorkspace.workspaceId) {
-            return false;
-          }
         }
 
         // Active vs Archived

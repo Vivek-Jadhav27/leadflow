@@ -48,7 +48,8 @@ export default function SequencesPage() {
     deleteSequence,
   } = useCRM();
 
-  const { user, role, isAdmin } = useAuthContext();
+  const { user, role, isAdmin, currentWorkspace } = useAuthContext();
+  const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
   const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'approved' | 'pending'>('all');
@@ -60,6 +61,10 @@ export default function SequencesPage() {
   const [newSeqDesc, setNewSeqDesc] = useState('');
 
   const filteredSequences = sequences.filter((s) => {
+    // 1. Strictly isolate to the current workspace
+    if (currentWorkspaceId && s.workspaceId && s.workspaceId !== currentWorkspaceId) {
+      return false;
+    }
     if (filterStatus === 'approved') return s.approvalStatus === 'approved';
     if (filterStatus === 'pending') return s.approvalStatus !== 'approved';
     return true;
@@ -125,6 +130,9 @@ export default function SequencesPage() {
       approvedBy: isAdmin ? (user?.displayName || 'Admin') : undefined,
       approvedAt: isAdmin ? new Date().toISOString() : undefined,
       enrolledLeadsCount: 0,
+      workspaceId: currentWorkspaceId,
+      createdBy: user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
+      createdByUid: user?.uid || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       steps: defaultSteps,

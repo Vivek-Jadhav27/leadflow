@@ -16,8 +16,9 @@ interface AddLeadDrawerProps {
 
 export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProps) {
   const { leads, sequences, team, createLead, updateLead } = useCRM();
-  const { user, isAdmin } = useAuthContext();
+  const { user, isAdmin, currentWorkspace } = useAuthContext();
 
+  const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
   const isSdr = !isAdmin && !!user;
   const currentSdrName = user?.displayName || user?.email?.split('@')[0] || 'Outbound SDR';
   const currentSdrEmail = user?.email || '';
@@ -126,6 +127,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         assignedToId: finalAssigneeId,
         assignedToName: finalAssigneeName,
         assignedToEmail: finalAssigneeEmail,
+        workspaceId: leadToEdit.workspaceId || currentWorkspaceId,
         outreachStatus: sequenceId
           ? (leadToEdit.outreachStatus === 'unassigned' ? 'in_sequence' : leadToEdit.outreachStatus)
           : (leadToEdit.outreachStatus === 'in_sequence' ? 'unassigned' : leadToEdit.outreachStatus),
@@ -149,6 +151,7 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         assignedToId: finalAssigneeId,
         assignedToName: finalAssigneeName,
         assignedToEmail: finalAssigneeEmail,
+        workspaceId: currentWorkspaceId,
       });
     }
 

@@ -25,13 +25,42 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, count: 0, sequences: [] }, { status: 200, headers: corsHeaders });
     }
 
-    const workspaceId =
+    let token = '';
+    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else {
+      const tokenCookie = req.cookies.get('leadflow_auth_token');
+      if (tokenCookie) {
+        token = tokenCookie.value;
+      }
+    }
+
+    let resolvedWorkspaceId =
       req.headers.get('x-workspace-id') ||
-      req.nextUrl.searchParams.get('workspaceId');
+      req.nextUrl.searchParams.get('workspaceId') ||
+      null;
+
+    if (!resolvedWorkspaceId && token) {
+      try {
+        const decoded = await adminAuth.verifyIdToken(token);
+        if (decoded?.uid) {
+          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
+          if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
+            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
+          } else {
+            const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
+            if (!ownedWsSnap.empty) {
+              resolvedWorkspaceId = ownedWsSnap.docs[0].id;
+            }
+          }
+        }
+      } catch {}
+    }
 
     let q: any = adminDb.collection('sequences');
-    if (workspaceId) {
-      q = q.where('workspaceId', '==', workspaceId);
+    if (resolvedWorkspaceId) {
+      q = q.where('workspaceId', '==', resolvedWorkspaceId);
     }
 
     const snapshot = await q.get();
@@ -73,8 +102,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let resolvedWorkspaceId = req.headers.get('x-workspace-id') || body.workspaceId || 'default_workspace';
+    let resolvedWorkspaceId = req.headers.get('x-workspace-id') || body.workspaceId || null;
     let author = body.createdBy || 'Workspace Admin';
+    let authorUid: string | null = body.createdByUid || null;
 
     const isAdminReady =
       typeof isFirebaseAdminConfigured === 'function'
@@ -86,9 +116,17 @@ export async function POST(req: NextRequest) {
         const decoded = await adminAuth.verifyIdToken(token);
         if (decoded?.email) author = decoded.email;
         if (decoded?.uid) {
-          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists) {
-            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId || resolvedWorkspaceId;
+          authorUid = decoded.uid;
+          if (!resolvedWorkspaceId) {
+            const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
+            if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
+              resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
+            } else {
+              const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
+              if (!ownedWsSnap.empty) {
+                resolvedWorkspaceId = ownedWsSnap.docs[0].id;
+              }
+            }
           }
         }
       } catch {}
@@ -106,7 +144,9 @@ export async function POST(req: NextRequest) {
       approvalStatus: body.approvalStatus || 'approved',
       approvedBy: body.approvedBy || author,
       approvedAt: body.approvedAt || now,
-      workspaceId: resolvedWorkspaceId,
+      workspaceId: resolvedWorkspaceId || 'default_workspace',
+      createdBy: author,
+      createdByUid: authorUid,
       enrolledLeadsCount: body.enrolledLeadsCount || 0,
       createdAt: body.createdAt || now,
       updatedAt: now,
