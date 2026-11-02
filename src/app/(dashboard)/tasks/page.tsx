@@ -28,7 +28,7 @@ import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { Task } from '@/types/crm';
-import { formatDate } from '@/utils/date';
+import { formatDate, getTodayString } from '@/utils/date';
 import { toast } from 'sonner';
 
 export default function TasksPage() {
@@ -56,11 +56,11 @@ export default function TasksPage() {
   const [taskTitle, setTaskTitle] = useState('');
   const [taskLeadId, setTaskLeadId] = useState(leads[0]?.id || '');
   const [taskType, setTaskType] = useState<Task['type']>('linkedin_message');
-  const [taskDueDate, setTaskDueDate] = useState(new Date().toISOString().split('T')[0]);
+  const [taskDueDate, setTaskDueDate] = useState(getTodayString());
   const [taskPriority, setTaskPriority] = useState<Task['priority']>('medium');
   const [taskAssignedTo, setTaskAssignedTo] = useState(team[0]?.id || 'user_alex_rivera');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getTodayString();
 
   const filteredTasks = tasks.filter((t) => {
     // Role-based Access Control: SDR can see ONLY their assigned tasks

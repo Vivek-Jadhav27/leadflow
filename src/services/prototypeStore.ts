@@ -8,6 +8,7 @@ import {
   EnrichedData,
 } from '@/types/crm';
 import { AuthUser } from '@/types/user';
+import { getTodayString, getFutureDateString } from '@/utils/date';
 
 const STORAGE_KEY = 'leadflow_hubspot_crm_db_v3';
 
@@ -515,7 +516,7 @@ class PrototypeStore {
     }
 
     const step = seq.steps.find((s) => s.stepNumber === nextStepNum);
-    const dueDate = new Date(Date.now() + (step?.delayDays || 1) * 86400000).toISOString().split('T')[0];
+    const dueDate = getFutureDateString(step?.delayDays ?? 1);
 
     let newConnStatus = lead.connectionStatus;
     let newOutreachStatus = lead.outreachStatus;
@@ -524,7 +525,7 @@ class PrototypeStore {
       newConnStatus = 'request_sent';
       newOutreachStatus = 'in_sequence';
     } else if (nextStepNum === 3) {
-      newOutreachStatus = 'message_sent';
+      newOutreachStatus = 'in_sequence';
     } else if (nextStepNum >= 4) {
       newOutreachStatus = 'followup_due';
     }

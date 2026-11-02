@@ -34,9 +34,10 @@ import { Task, Lead } from '@/types/crm';
 import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
+import { getTodayString } from '@/utils/date';
 
 export function SDRDashboardView() {
-  const { user, currentWorkspace } = useAuthContext();
+  const { user, currentWorkspace, isAdmin } = useAuthContext();
   const {
     tasks,
     leads,
@@ -68,7 +69,8 @@ export function SDRDashboardView() {
   const [newTaskType, setNewTaskType] = useState<Task['type']>('linkedin_message');
   const [newTaskPriority, setNewTaskPriority] = useState<Task['priority']>('medium');
 
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  // Use local date (e.g. 2026-11-03) instead of UTC date string to avoid timezone date shifts
+  const todayStr = useMemo(() => getTodayString(), []);
   const todayFormatted = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', {
       weekday: 'long',
@@ -80,13 +82,18 @@ export function SDRDashboardView() {
 
   const userEmailNorm = useMemo(() => (user?.email || '').toLowerCase().trim(), [user?.email]);
 
-  // SDR can see ONLY ASSIGNED LEADS
+  // SDR can see their assigned/captured leads; Admin can see all leads in workspace
   const assignedLeads = useMemo(() => {
     return leads.filter((l) => {
+      if (isAdmin || user?.role === 'admin') return true;
       const leadEmail = (l.assignedToEmail || '').toLowerCase().trim();
-      return (user?.uid && l.assignedToId === user.uid) || (userEmailNorm && leadEmail === userEmailNorm);
+      return (
+        (user?.uid && l.assignedToId === user.uid) ||
+        (user?.uid && l.capturedByUid === user.uid) ||
+        (userEmailNorm && leadEmail === userEmailNorm)
+      );
     });
-  }, [leads, user?.uid, userEmailNorm]);
+  }, [leads, user?.uid, user?.role, isAdmin, userEmailNorm]);
 
   // Map tasks to leads and enrich items for Today's Queue
   const todayItems = useMemo(() => {
@@ -173,15 +180,21 @@ export function SDRDashboardView() {
       });
     }
 
-    // 2. Also surface any assigned leads that have nextFollowUpDate === todayStr or followup_due but no task generated
+    // 2. Also surface any assigned leads that have nextFollowUpDate <= todayStr or pending sequence action
     assignedLeads.forEach((l) => {
       if (l.disposition === 'archived') return;
       if (processedLeadIds.has(l.id)) return;
 
-      const isDueToday = l.nextFollowUpDate === todayStr;
+      const isDueOrOverdue = Boolean(l.nextFollowUpDate && l.nextFollowUpDate <= todayStr);
       const isFollowupDue = l.outreachStatus === 'followup_due';
+      const isSequenceActionDue = Boolean(
+        l.sequenceId &&
+        l.outreachStatus !== 'completed' &&
+        l.outreachStatus !== 'stopped' &&
+        (isDueOrOverdue || isFollowupDue || l.nextFollowUpDate === todayStr)
+      );
 
-      if (isDueToday || isFollowupDue) {
+      if (isDueOrOverdue || isFollowupDue || isSequenceActionDue) {
         const seq = sequences.find((s) => s.id === l.sequenceId);
         const stepNum = l.currentStepNumber || 1;
         const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
@@ -190,7 +203,7 @@ export function SDRDashboardView() {
         let actionType: 'message' | 'followup' | 'connect' = 'followup';
         if (step?.actionType === 'connection_request' || l.currentStepNumber === 1) {
           actionType = 'connect';
-        } else if (step?.actionType === 'send_message') {
+        } else if (step?.actionType === 'send_message' || l.currentStepNumber === 3) {
           actionType = 'message';
         }
 
@@ -203,7 +216,7 @@ export function SDRDashboardView() {
           isCompleted: false,
           sequenceTitle: seq?.name || l.sequenceName || 'Outreach Cadence',
           stepNumber: stepNum,
-          stepTitle: step?.title || '',
+          stepTitle: step?.title || l.nextActionTitle || `Step ${stepNum}`,
           messageTemplate: stepTemplate,
         });
       }

@@ -22,6 +22,7 @@ import { SDRDashboardView } from '@/components/dashboard/SDRDashboardView';
 export default function DashboardOverviewPage() {
   const { user, currentWorkspace, isAdmin, role } = useAuthContext();
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState<'queue' | 'overview'>('queue');
   const [stats, setStats] = useState({
     teamMembersCount: 1,
     leadsCount: 0,
@@ -29,11 +30,6 @@ export default function DashboardOverviewPage() {
   });
 
   const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
-
-  // If SDR, display dedicated SDR Outreach Dashboard with Today's tasks
-  if (!isOwnerOrAdmin) {
-    return <SDRDashboardView />;
-  }
 
   // Fetch real workspace stats from backend
   useEffect(() => {
@@ -54,10 +50,70 @@ export default function DashboardOverviewPage() {
     loadStats();
   }, [currentWorkspace?.workspaceId]);
 
+  // If SDR, display dedicated SDR Outreach Dashboard with Today's tasks
+  if (!isOwnerOrAdmin) {
+    return <SDRDashboardView />;
+  }
+
+  // If Admin chose Today's Outreach Queue, display live SDR Outreach Queue
+  if (isOwnerOrAdmin && adminTab === 'queue') {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#dfe3eb] pb-4">
+          <div>
+            <h1 className="text-xl font-bold text-[#2d3e50]">Sales Engine Dashboard</h1>
+            <p className="text-xs text-[#516f90]">Daily outreach execution queue and workspace activity.</p>
+          </div>
+          <div className="inline-flex rounded-md p-1 bg-[#f0f4f8] border border-[#dfe3eb]">
+            <button
+              type="button"
+              onClick={() => setAdminTab('queue')}
+              className="px-3.5 py-1.5 rounded-sm text-xs font-bold transition-all shadow-xs bg-white text-[#ff7a59] border border-[#cbd6e2] cursor-pointer"
+            >
+              Today&apos;s Outreach Queue
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminTab('overview')}
+              className="px-3.5 py-1.5 rounded-sm text-xs font-semibold text-[#516f90] hover:text-[#2d3e50] transition-all cursor-pointer"
+            >
+              Workspace Overview & Setup
+            </button>
+          </div>
+        </div>
+        <SDRDashboardView />
+      </div>
+    );
+  }
+
   const companyName = currentWorkspace?.companyName || user?.companyName || 'LeadFlow Workspace';
 
   return (
     <div className="space-y-8">
+      {/* Header View Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#dfe3eb] pb-4">
+        <div>
+          <h1 className="text-xl font-bold text-[#2d3e50]">Sales Engine Dashboard</h1>
+          <p className="text-xs text-[#516f90]">Daily outreach execution queue and workspace activity.</p>
+        </div>
+        <div className="inline-flex rounded-md p-1 bg-[#f0f4f8] border border-[#dfe3eb]">
+          <button
+            type="button"
+            onClick={() => setAdminTab('queue')}
+            className="px-3.5 py-1.5 rounded-sm text-xs font-semibold text-[#516f90] hover:text-[#2d3e50] transition-all cursor-pointer"
+          >
+            Today&apos;s Outreach Queue
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdminTab('overview')}
+            className="px-3.5 py-1.5 rounded-sm text-xs font-bold transition-all shadow-xs bg-white text-[#ff7a59] border border-[#cbd6e2] cursor-pointer"
+          >
+            Workspace Overview & Setup
+          </button>
+        </div>
+      </div>
+
       {/* Welcome Banner */}
       <div className="bg-white rounded-lg border border-[#dfe3eb] p-6 sm:p-8 shadow-xs">
         <div className="max-w-3xl">
