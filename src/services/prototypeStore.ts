@@ -158,27 +158,85 @@ class PrototypeStore {
       timestamp: now,
     });
 
-    // If sequence assigned, record and create first task
-    if (newLead.sequenceId) {
+    // If a connection note was sent manually on LinkedIn, log event
+    if (newLead.connectionNote) {
+      this.addActivityEvent({
+        leadId: newLead.id,
+        leadName: `${newLead.firstName} ${newLead.lastName}`,
+        type: 'linkedin_connect',
+        title: 'LinkedIn Connection Note Sent',
+        description: newLead.connectionNote,
+        actorName: newLead.assignedToName || 'Outbound SDR',
+        timestamp: now,
+      });
+    }
+
+    // If SDR requested to finish cadence later, create a task in today's pending list
+    if (newLead.outreachStatus === 'needs_sequence') {
+      this.createTask({
+        title: `Draft Follow-up Cadence for ${newLead.firstName} ${newLead.lastName}`,
+        leadId: newLead.id,
+        leadName: `${newLead.firstName} ${newLead.lastName}`,
+        leadCompany: newLead.company,
+        leadLinkedin: newLead.linkedinUrl,
+        type: 'manual_review',
+        dueDate: now.split('T')[0],
+        assignedToId: newLead.assignedToId || 'sdr_current',
+        assignedToName: newLead.assignedToName || 'Outbound SDR',
+        priority: 'high',
+        status: 'pending',
+        notes: newLead.connectionNote
+          ? `Connection sent with note: "${newLead.connectionNote}"`
+          : 'Connection request sent on LinkedIn. Follow-up cadence needed.',
+      });
+    } else if (newLead.sequenceId) {
+      // If sequence assigned and connection already sent, schedule Step 2 task
       const seq = this.getSequenceById(newLead.sequenceId);
       if (seq && seq.steps.length > 0) {
-        const firstStep = seq.steps[0];
-        this.createTask({
-          title: `Step 1: ${firstStep.title} for ${newLead.firstName} ${newLead.lastName}`,
-          leadId: newLead.id,
-          leadName: `${newLead.firstName} ${newLead.lastName}`,
-          leadCompany: newLead.company,
-          leadLinkedin: newLead.linkedinUrl,
-          sequenceId: seq.id,
-          stepNumber: 1,
-          type: 'linkedin_connect',
-          dueDate: new Date().toISOString().split('T')[0],
-          assignedToId: newLead.assignedToId ?? '',
-          assignedToName: newLead.assignedToName ?? '',
-          priority: 'high',
-          status: 'pending',
-          messageTemplate: firstStep.messageTemplate,
-        });
+        if (newLead.connectionStatus === 'request_sent' && seq.steps.length > 1) {
+          const step2 = seq.steps.find((s) => s.stepNumber === 2) || seq.steps[1];
+          const delayDays = step2.delayDays || 3;
+          const dueDate = new Date(Date.now() + delayDays * 86400000).toISOString().split('T')[0];
+
+          let taskType: Task['type'] = 'linkedin_message';
+          if (step2.actionType === 'followup') taskType = 'followup';
+
+          this.createTask({
+            title: `Step 2: ${step2.title} for ${newLead.firstName} ${newLead.lastName}`,
+            leadId: newLead.id,
+            leadName: `${newLead.firstName} ${newLead.lastName}`,
+            leadCompany: newLead.company,
+            leadLinkedin: newLead.linkedinUrl,
+            sequenceId: seq.id,
+            stepNumber: 2,
+            type: taskType,
+            dueDate: dueDate,
+            assignedToId: newLead.assignedToId ?? '',
+            assignedToName: newLead.assignedToName ?? '',
+            priority: 'high',
+            status: 'pending',
+            messageTemplate: step2.messageTemplate,
+          });
+        } else {
+          // Normal Step 1 connect task
+          const firstStep = seq.steps[0];
+          this.createTask({
+            title: `Step 1: ${firstStep.title} for ${newLead.firstName} ${newLead.lastName}`,
+            leadId: newLead.id,
+            leadName: `${newLead.firstName} ${newLead.lastName}`,
+            leadCompany: newLead.company,
+            leadLinkedin: newLead.linkedinUrl,
+            sequenceId: seq.id,
+            stepNumber: 1,
+            type: 'linkedin_connect',
+            dueDate: new Date().toISOString().split('T')[0],
+            assignedToId: newLead.assignedToId ?? '',
+            assignedToName: newLead.assignedToName ?? '',
+            priority: 'high',
+            status: 'pending',
+            messageTemplate: firstStep.messageTemplate,
+          });
+        }
       }
     }
 
@@ -219,7 +277,12 @@ class PrototypeStore {
       const itemUrl = normUrl(item.linkedinUrl);
 
       const existingIndex = this.db.leads.findIndex(
-        (l) => l.id === item.id || (itemUrl && normUrl(l.linkedinUrl) === itemUrl)
+        (l) =>
+          l.id === item.id ||
+          (itemUrl && normUrl(l.linkedinUrl) === itemUrl) ||
+          (item.firstName && item.lastName &&
+           l.firstName?.trim().toLowerCase() === item.firstName.trim().toLowerCase() &&
+           l.lastName?.trim().toLowerCase() === item.lastName.trim().toLowerCase())
       );
 
       // Preserve or initialize activity history
@@ -274,6 +337,12 @@ class PrototypeStore {
         }
       }
 
+      const extractedNote =
+        item.connectionNote ||
+        item.notes?.match(/connection note:\s*(.+)/i)?.[1]?.trim() ||
+        item.notes?.match(/connection sent with note:\s*"?([^"]+)"?/i)?.[1]?.trim() ||
+        (!item.notes?.startsWith('Added to') && !item.notes?.startsWith('Imported') && !item.notes?.startsWith('Captured from') && (item.notes?.length || 0) > 8 ? item.notes : null);
+
       const leadRecord: Lead = {
         id: item.id,
         firstName: item.firstName || '',
@@ -300,7 +369,10 @@ class PrototypeStore {
         capturedByUid: item.capturedByUid || null,
         nextFollowUpDate: item.nextFollowUpDate || null,
         sequenceStartDate: item.sequenceStartDate || item.nextFollowUpDate || null,
-        nextActionTitle: item.nextActionTitle || null,
+        nextActionTitle: item.nextActionTitle || (item.outreachStatus === 'needs_sequence' ? 'Draft Follow-up Cadence' : null),
+        connectionNote: extractedNote || null,
+        customSteps: item.customSteps || null,
+        sequenceMode: item.sequenceMode || null,
         notes: item.notes || null,
         activityHistory,
         enrichedData: item.enrichedData || undefined,
@@ -308,13 +380,131 @@ class PrototypeStore {
         updatedAt: item.updatedAt || new Date().toISOString(),
       };
 
+      // If lead is in needs_sequence status, ensure a pending task exists for today
+      if (leadRecord.outreachStatus === 'needs_sequence') {
+        const hasExistingTask = this.db.tasks.some(
+          (t) => t.leadId === leadRecord.id && t.status !== 'completed'
+        );
+        if (!hasExistingTask) {
+          const nowStr = new Date().toISOString().split('T')[0];
+          this.db.tasks.unshift({
+            id: `task_needs_seq_${leadRecord.id}`,
+            title: `Draft Follow-up Cadence for ${leadRecord.firstName} ${leadRecord.lastName}`,
+            leadId: leadRecord.id,
+            leadName: `${leadRecord.firstName} ${leadRecord.lastName}`,
+            leadCompany: leadRecord.company,
+            leadLinkedin: leadRecord.linkedinUrl,
+            type: 'manual_review',
+            dueDate: nowStr,
+            assignedToId: leadRecord.assignedToId || 'sdr_current',
+            assignedToName: leadRecord.assignedToName || 'Outbound SDR',
+            priority: 'high',
+            status: 'pending',
+            notes: leadRecord.connectionNote
+              ? `Connection sent with note: "${leadRecord.connectionNote}"`
+              : 'Connection request sent on LinkedIn. Follow-up sequence needed.',
+          });
+        }
+      }
+
+      // If lead is awaiting sequence approval or assigned a custom cadence, ensure sequence exists in sequences array
+      if (
+        leadRecord.outreachStatus === 'pending_sequence_approval' ||
+        (leadRecord.sequenceId && leadRecord.sequenceId.startsWith('seq_custom_'))
+      ) {
+        const customSeqId = leadRecord.sequenceId || `seq_custom_${leadRecord.id}`;
+        leadRecord.sequenceId = customSeqId;
+        leadRecord.sequenceName = leadRecord.sequenceName || `Custom Cadence: ${leadRecord.firstName} ${leadRecord.lastName}`;
+
+        const noteText =
+          leadRecord.connectionNote ||
+          leadRecord.notes?.match(/connection note:\s*(.+)/i)?.[1]?.trim() ||
+          leadRecord.notes?.match(/connection sent with note:\s*"?([^"]+)"?/i)?.[1]?.trim() ||
+          (!leadRecord.notes?.startsWith('Added to') && !leadRecord.notes?.startsWith('Imported') && (leadRecord.notes?.length || 0) > 5 ? leadRecord.notes : '') ||
+          '';
+
+        const existingSeq = this.db.sequences.find((s) => s.id === customSeqId);
+        if (!existingSeq) {
+          const customSeq: Sequence = {
+            id: customSeqId,
+            name: leadRecord.sequenceName,
+            channel: 'linkedin',
+            description: `Bespoke 1:1 cadence for ${leadRecord.firstName} ${leadRecord.lastName} at ${leadRecord.company}`,
+            steps: (Array.isArray(leadRecord.customSteps) && leadRecord.customSteps.length > 0)
+              ? leadRecord.customSteps.map((s: any, idx: number) => ({
+                  id: `step_${customSeqId}_${s.stepNumber || idx + 1}`,
+                  stepNumber: s.stepNumber || idx + 1,
+                  actionType: s.actionType || (idx === 0 ? 'connection_request' : 'send_message'),
+                  title: s.title || (idx === 0 ? 'Connection Request' : `Follow-up ${idx}`),
+                  delayDays: typeof s.delayDays === 'number' ? s.delayDays : (idx === 0 ? 0 : idx === 1 ? 3 : 7),
+                  messageTemplate: idx === 0 ? (s.messageTemplate || noteText) : (s.messageTemplate || ''),
+                  enabled: true,
+                }))
+              : [
+                  {
+                    id: `step_${customSeqId}_1`,
+                    stepNumber: 1,
+                    actionType: 'connection_request',
+                    title: 'Connection Request',
+                    delayDays: 0,
+                    messageTemplate: noteText,
+                    enabled: true,
+                  },
+                  {
+                    id: `step_${customSeqId}_2`,
+                    stepNumber: 2,
+                    actionType: 'send_message',
+                    title: 'First Follow-up',
+                    delayDays: 3,
+                    messageTemplate: `Hi ${leadRecord.firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${leadRecord.company} optimize outbound sales outreach.`,
+                    enabled: true,
+                  },
+                  {
+                    id: `step_${customSeqId}_3`,
+                    stepNumber: 3,
+                    actionType: 'send_message',
+                    title: 'Second Follow-up',
+                    delayDays: 7,
+                    messageTemplate: `Hi ${leadRecord.firstName}, following up on my previous message. Wanted to see if you had 5 minutes this week for a brief conversation?`,
+                    enabled: true,
+                  },
+                ],
+            status: 'pending_approval',
+            approvalStatus: 'pending',
+            workspaceId: leadRecord.workspaceId || workspaceId || null,
+            createdBy: leadRecord.assignedToName || leadRecord.capturedBy || 'Outbound SDR',
+            createdByUid: leadRecord.capturedByUid || null,
+            createdByRole: 'sdr',
+            targetRole: 'sdr',
+            isCustom: true,
+            targetLeadId: leadRecord.id,
+            targetLeadName: `${leadRecord.firstName} ${leadRecord.lastName}`,
+            targetLeadCompany: leadRecord.company,
+            targetLeadLinkedin: leadRecord.linkedinUrl,
+            createdAt: leadRecord.createdAt || new Date().toISOString(),
+            updatedAt: leadRecord.updatedAt || new Date().toISOString(),
+          };
+          this.db.sequences.unshift(customSeq);
+        } else if (noteText && existingSeq.steps?.[0]) {
+          const firstStep = existingSeq.steps[0];
+          if (!firstStep.messageTemplate || firstStep.messageTemplate === 'Connection request sent on LinkedIn') {
+            firstStep.messageTemplate = noteText;
+          }
+        }
+      }
+
       if (existingIndex === -1) {
         this.db.leads.push(leadRecord);
         modifiedCount++;
       } else {
+        const existing = this.db.leads[existingIndex];
         this.db.leads[existingIndex] = {
-          ...this.db.leads[existingIndex],
+          ...existing,
           ...leadRecord,
+          id: existing.id,
+          connectionNote: leadRecord.connectionNote || existing.connectionNote || null,
+          notes: leadRecord.notes || existing.notes || null,
+          activityHistory: [...(leadRecord.activityHistory || []), ...(existing.activityHistory || [])],
         };
         modifiedCount++;
       }

@@ -210,6 +210,75 @@
     }
     .footer a { color: var(--orange); font-weight: 600; text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
+
+    /* ── Outreach Cadence Card ── */
+    .outreach-card {
+      background: #f8fafc; border: 1px solid var(--border); border-radius: 7px;
+      padding: 10px 11px; margin-top: 10px; margin-bottom: 8px;
+    }
+    .outreach-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;
+    }
+    .outreach-title {
+      font-size: 11px; font-weight: 700; color: var(--navy); text-transform: uppercase; letter-spacing: .5px;
+    }
+    .mode-tabs {
+      display: flex; gap: 4px; background: #e2e8f0; padding: 2px; border-radius: 5px;
+    }
+    .mode-tab {
+      padding: 3px 8px; font-size: 10px; font-weight: 600; color: var(--muted);
+      border: none; background: transparent; border-radius: 4px; cursor: pointer;
+      transition: all .15s;
+    }
+    .mode-tab.active {
+      background: #fff; color: var(--navy); font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.08);
+    }
+    .seq-select {
+      width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 11.5px; color: var(--text); background: #fff; margin-bottom: 6px;
+    }
+    .seq-select:focus { outline: none; border-color: var(--orange); }
+    .note-box {
+      background: #fff; border: 1px solid #fed7aa; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px;
+    }
+    .note-box-hdr {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;
+    }
+    .note-box-title {
+      font-size: 10px; font-weight: 700; color: #c2410c; text-transform: uppercase; letter-spacing: .4px;
+    }
+    .btn-copy {
+      background: #fff7ed; border: 1px solid #fdba74; color: #ea580c; border-radius: 4px;
+      font-size: 10px; font-weight: 700; padding: 2px 6px; cursor: pointer; transition: all .15s;
+    }
+    .btn-copy:hover { background: #ffedd5; }
+    .note-text {
+      font-size: 11px; color: #334155; line-height: 1.4; white-space: pre-wrap; word-break: break-word;
+      max-height: 90px; overflow-y: auto; background: #fafaf9; padding: 5px 6px; border-radius: 4px; border: 1px solid #f5f5f4;
+    }
+    .checkbox-row {
+      display: flex; align-items: flex-start; gap: 6px; font-size: 11px; color: #475569;
+      cursor: pointer; user-select: none; line-height: 1.35; margin-top: 4px;
+    }
+    .checkbox-row input[type="checkbox"] {
+      margin-top: 2px; cursor: pointer;
+    }
+    textarea {
+      width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 11.5px; color: var(--text); background: #fff; resize: vertical; box-sizing: border-box;
+      font-family: inherit; line-height: 1.4;
+    }
+    textarea:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 2px rgba(255,122,89,.15); }
+    .char-count {
+      text-align: right; font-size: 9.5px; color: var(--muted); margin-top: 2px;
+    }
+    .grid-step {
+      display: flex; gap: 6px; align-items: center;
+    }
+    .custom-hint {
+      font-size: 10px; color: #0284c7; background: #e0f2fe; padding: 5px 8px; border-radius: 5px; margin-top: 6px;
+      line-height: 1.3;
+    }
   </style>
 </head>
 <body>
@@ -331,6 +400,73 @@
       <div class="fg">
         <label>LinkedIn URL</label>
         <input id="linkedinUrl" type="url" readonly />
+      </div>
+
+      <!-- Outreach & Sequence Section -->
+      <div class="outreach-card">
+        <div class="outreach-header">
+          <label class="outreach-title">Outreach Cadence</label>
+          <div class="mode-tabs">
+            <button type="button" class="mode-tab active" id="tab-mode-approved">Pre-Approved</button>
+            <button type="button" class="mode-tab" id="tab-mode-custom">Custom</button>
+          </div>
+        </div>
+
+        <!-- Mode 1: Pre-Approved Sequence -->
+        <div id="section-approved-seq">
+          <div class="fg" style="margin-bottom: 6px;">
+            <label for="seq-select">Select Approved Sequence</label>
+            <select id="seq-select" class="seq-select">
+              <option value="">-- Choose Sequence --</option>
+            </select>
+          </div>
+
+          <!-- Step 1 Connection Note Preview (if sequence has one) -->
+          <div id="step1-preview-box" class="note-box" style="display:none;">
+            <div class="note-box-hdr">
+              <span class="note-box-title">Step 1: Connection Note</span>
+              <button type="button" id="btn-copy-note" class="btn-copy" title="Copy note to clipboard">📋 Copy</button>
+            </div>
+            <div id="step1-note-text" class="note-text"></div>
+          </div>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-conn-sent-approved" checked />
+            <span>Mark connection request + note sent on LinkedIn</span>
+          </label>
+        </div>
+
+        <!-- Mode 2: Custom Cadence -->
+        <div id="section-custom-seq" style="display:none;">
+          <div class="fg" style="margin-bottom: 6px;">
+            <label for="custom-conn-note">Connection Note Sent</label>
+            <textarea id="custom-conn-note" rows="2" maxlength="300" placeholder="Paste or type connection note sent on LinkedIn..."></textarea>
+            <div class="char-count"><span id="char-count-val">0</span>/300</div>
+          </div>
+
+          <label class="checkbox-row" style="margin-bottom: 6px;">
+            <input type="checkbox" id="chk-finish-cadence-later" checked />
+            <span>Note sent only; draft follow-up cadence later on portal</span>
+          </label>
+
+          <div id="custom-steps-container" style="display:none;">
+            <div class="fg" style="margin-bottom: 6px;">
+              <label>Step 2: Follow-up 1 (Days after connect)</label>
+              <div class="grid-step">
+                <input type="number" id="custom-step2-delay" value="3" min="1" max="30" style="width: 55px;" />
+                <input type="text" id="custom-step2-msg" placeholder="Follow-up message..." />
+              </div>
+            </div>
+            <div class="fg" style="margin-bottom: 6px;">
+              <label>Step 3: Follow-up 2 (Days after connect)</label>
+              <div class="grid-step">
+                <input type="number" id="custom-step3-delay" value="7" min="1" max="60" style="width: 55px;" />
+                <input type="text" id="custom-step3-msg" placeholder="Follow-up message..." />
+              </div>
+            </div>
+            <p class="custom-hint">ℹ Custom multi-step cadence will be sent for Admin Approval.</p>
+          </div>
+        </div>
       </div>
 
       <button type="submit" id="btn-add" class="btn-add">+ Add Lead to LeadFlow</button>

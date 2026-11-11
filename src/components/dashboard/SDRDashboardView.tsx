@@ -180,11 +180,12 @@ export function SDRDashboardView() {
       });
     }
 
-    // 2. Also surface any assigned leads that have nextFollowUpDate <= todayStr or pending sequence action
+    // 2. Also surface any assigned leads that have nextFollowUpDate <= todayStr or pending sequence action, or needs_sequence!
     assignedLeads.forEach((l) => {
       if (l.disposition === 'archived') return;
       if (processedLeadIds.has(l.id)) return;
 
+      const isNeedsSequence = l.outreachStatus === 'needs_sequence';
       const isDueOrOverdue = Boolean(l.nextFollowUpDate && l.nextFollowUpDate <= todayStr);
       const isFollowupDue = l.outreachStatus === 'followup_due';
       const isSequenceActionDue = Boolean(
@@ -194,18 +195,24 @@ export function SDRDashboardView() {
         (isDueOrOverdue || isFollowupDue || l.nextFollowUpDate === todayStr)
       );
 
-      if (isDueOrOverdue || isFollowupDue || isSequenceActionDue) {
+      if (isNeedsSequence || isDueOrOverdue || isFollowupDue || isSequenceActionDue) {
         const seq = sequences.find((s) => s.id === l.sequenceId);
         const stepNum = l.currentStepNumber || 1;
         const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
         const stepTemplate = step?.messageTemplate;
 
         let actionType: 'message' | 'followup' | 'connect' = 'followup';
-        if (step?.actionType === 'connection_request' || l.currentStepNumber === 1) {
+        if (isNeedsSequence) {
+          actionType = 'followup';
+        } else if (step?.actionType === 'connection_request' || l.currentStepNumber === 1) {
           actionType = 'connect';
         } else if (step?.actionType === 'send_message' || l.currentStepNumber === 3) {
           actionType = 'message';
         }
+
+        const noteSnippet = l.connectionNote
+          ? `Connection sent on LinkedIn with note: "${l.connectionNote}". Click Assign Cadence to select or build follow-up sequence.`
+          : 'Connection request sent on LinkedIn. Follow-up sequence needed.';
 
         items.push({
           id: `lead_due_${l.id}`,
@@ -214,10 +221,10 @@ export function SDRDashboardView() {
           dueDate: l.nextFollowUpDate || todayStr,
           isOverdue: Boolean(l.nextFollowUpDate && l.nextFollowUpDate < todayStr),
           isCompleted: false,
-          sequenceTitle: seq?.name || l.sequenceName || 'Outreach Cadence',
+          sequenceTitle: seq?.name || l.sequenceName || (isNeedsSequence ? 'Cadence Needed' : 'Outreach Cadence'),
           stepNumber: stepNum,
-          stepTitle: step?.title || l.nextActionTitle || `Step ${stepNum}`,
-          messageTemplate: stepTemplate,
+          stepTitle: isNeedsSequence ? 'Draft Follow-up Cadence' : (step?.title || l.nextActionTitle || `Step ${stepNum}`),
+          messageTemplate: isNeedsSequence ? noteSnippet : stepTemplate,
         });
       }
     });
@@ -268,6 +275,10 @@ export function SDRDashboardView() {
 
   // Generate personalized template matching exact sequence step
   const getPersonalizedMessage = (item: typeof todayItems[0]) => {
+    if (item.lead.outreachStatus === 'needs_sequence') {
+      return '';
+    }
+
     // 1. Resolve exact sequence and step template
     const seq = sequences.find(
       (s) => s.id === item.lead.sequenceId || (item.task && s.id === item.task.sequenceId)
@@ -275,35 +286,56 @@ export function SDRDashboardView() {
     const stepNum = item.stepNumber || item.lead.currentStepNumber || 1;
     const step = seq?.steps?.find((st) => st.stepNumber === stepNum);
 
-    const rawTemplate =
-      item.messageTemplate ||
-      step?.messageTemplate ||
-      item.task?.messageTemplate;
+    // Look for real template text, filtering out internal status strings
+    const isInternalStatus = (txt?: string | null) =>
+      !txt ||
+      !txt.trim() ||
+      txt.toLowerCase().includes('awaiting connection') ||
+      txt.toLowerCase().includes('action scheduled per cadence') ||
+      txt.toLowerCase().includes('click "assign cadence"');
 
-    if (rawTemplate && rawTemplate.trim()) {
-      return rawTemplate
-        .replace(/\{\{firstName\}\}/gi, item.lead.firstName || '')
-        .replace(/\{\{lastName\}\}/gi, item.lead.lastName || '')
-        .replace(/\{\{company\}\}/gi, item.lead.company || '')
-        .replace(/\{\{jobTitle\}\}/gi, item.lead.jobTitle || '');
+    let template: string | null = null;
+    if (item.task?.messageTemplate && !isInternalStatus(item.task.messageTemplate)) {
+      template = item.task.messageTemplate;
+    } else if (step?.messageTemplate && !isInternalStatus(step.messageTemplate)) {
+      template = step.messageTemplate;
+    } else if (item.messageTemplate && !isInternalStatus(item.messageTemplate)) {
+      template = item.messageTemplate;
     }
 
-    if (step && !step.messageTemplate) {
-      if (step.actionType === 'wait_for_acceptance') {
-        return `Awaiting connection acceptance from ${item.lead.firstName} on LinkedIn before sending next outreach message.`;
+    // If template is still empty or a wait step, find the actual message in the sequence
+    if (!template || !template.trim()) {
+      const realMsgStep = seq?.steps?.find(
+        (st) => st.messageTemplate && st.messageTemplate.trim() && !isInternalStatus(st.messageTemplate)
+      );
+      if (realMsgStep?.messageTemplate) {
+        template = realMsgStep.messageTemplate;
       }
-      return `${step.title}: Action scheduled per cadence rules.`;
     }
 
-    if (item.type === 'followup') {
-      return `Hi ${item.lead.firstName}, following up on my previous message regarding ${item.lead.company}.`;
+    // If sequence has no template, provide a real, contextual follow-up message
+    if (!template || !template.trim()) {
+      if (item.type === 'connect') {
+        template = 'Hi {{firstName}}, noticed your leadership at {{company}} and would love to connect and share some insights!';
+      } else {
+        template = 'Hi {{firstName}}, thanks for connecting! Following up to see if you had a moment to check how we help teams at {{company}} optimize outbound outreach. Would love to share a quick overview.';
+      }
     }
 
-    if (item.type === 'connect') {
-      return `Hi ${item.lead.firstName}, noticed your work at ${item.lead.company}. Would love to connect and follow your journey.`;
-    }
+    const fName = item.lead.firstName || 'there';
+    const lName = item.lead.lastName || '';
+    const comp  = item.lead.company || 'your company';
+    const role  = item.lead.jobTitle || 'your team';
 
-    return `Hi ${item.lead.firstName}, noticed your work at ${item.lead.company}. Would love to connect!`;
+    return template
+      .replace(/\{\{\s*firstName\s*\}\}/gi, fName)
+      .replace(/\{\{\s*first_name\s*\}\}/gi, fName)
+      .replace(/\{\{\s*lastName\s*\}\}/gi, lName)
+      .replace(/\{\{\s*last_name\s*\}\}/gi, lName)
+      .replace(/\{\{\s*company\s*\}\}/gi, comp)
+      .replace(/\{\{\s*companyName\s*\}\}/gi, comp)
+      .replace(/\{\{\s*jobTitle\s*\}\}/gi, role)
+      .replace(/\{\{\s*title\s*\}\}/gi, role);
   };
 
   // Actions
@@ -739,7 +771,8 @@ export function SDRDashboardView() {
               const initialLetters = (
                 (item.lead.firstName?.[0] || '') + (item.lead.lastName?.[0] || '')
               ).toUpperCase() || 'P';
-              const personalizedMsg = getPersonalizedMessage(item);
+              const isCadenceNeeded = item.lead.outreachStatus === 'needs_sequence' || !item.lead.sequenceId || Boolean(item.task?.title?.toLowerCase().includes('cadence'));
+              const personalizedMsg = isCadenceNeeded ? '' : getPersonalizedMessage(item);
               const isCopied = copiedTaskId === item.id;
 
               return (
@@ -773,26 +806,27 @@ export function SDRDashboardView() {
                           </span>
 
                           {/* Action Type Badge */}
-                          {item.type === 'message' && (
+                          {isCadenceNeeded ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-50 text-amber-700 border border-amber-200">
+                              <AlertCircle className="h-3 w-3" />
+                              <span>Cadence Needed</span>
+                            </span>
+                          ) : item.type === 'message' ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-[#e5f5f8] text-[#0091ae]">
                               <MessageSquare className="h-3 w-3" />
                               <span>Send Message</span>
                             </span>
-                          )}
-
-                          {item.type === 'followup' && (
+                          ) : item.type === 'followup' ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-[#fff5f2] text-[#ff7a59]">
                               <RotateCcw className="h-3 w-3" />
                               <span>Follow-up Due</span>
                             </span>
-                          )}
-
-                          {item.type === 'connect' && (
+                          ) : item.type === 'connect' ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-[#eff2f6] text-[#2d3e50]">
                               <UserPlus className="h-3 w-3" />
                               <span>Connection Request</span>
                             </span>
-                          )}
+                          ) : null}
 
                           {/* Overdue / Due status */}
                           {item.isOverdue && (
@@ -816,44 +850,55 @@ export function SDRDashboardView() {
                         <div className="flex flex-wrap items-center gap-3 text-xs text-[#516f90]">
                           <span>{item.lead.jobTitle || 'Decision Maker'}</span>
                           <span className="text-[#cbd6e2]">•</span>
-                          <span className="text-[#7c98b6] flex items-center gap-1 font-medium">
-                            <Layers className="h-3 w-3 text-[#0091ae]" />
-                            {item.sequenceTitle} (Step {item.stepNumber})
-                          </span>
-                        </div>
-
-                        {/* Message Preview Box */}
-                        <div className="rounded-md border border-[#e2e8f0] bg-[#f8fafc] p-2.5 sm:p-3 text-xs text-[#33475b] relative group/msg">
-                          <div className="flex items-center justify-between mb-1 pb-1 border-b border-[#eef2f6]">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#0091ae] flex items-center gap-1.5">
-                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#0091ae]" />
-                              {item.stepTitle
-                                ? `Sequence Step ${item.stepNumber}: ${item.stepTitle}`
-                                : `Sequence Message (Step ${item.stepNumber})`}
+                          {isCadenceNeeded ? (
+                            <span className="text-amber-700 font-medium flex items-center gap-1">
+                              <Layers className="h-3 w-3 text-amber-600" />
+                              Cadence not assigned
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyMessage(item)}
-                              className="flex items-center gap-1 text-[11px] font-semibold text-[#0091ae] hover:text-[#007a93] transition-colors"
-                            >
-                              {isCopied ? (
-                                <>
-                                  <Check className="h-3 w-3 text-emerald-600" />
-                                  <span className="text-emerald-600">Copied!</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="h-3 w-3" />
-                                  <span>Copy Message</span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-
-                          <p className="font-mono text-[11px] text-[#33475b] leading-relaxed whitespace-pre-wrap font-medium">
-                            {personalizedMsg}
-                          </p>
+                          ) : (
+                            <span className="text-[#7c98b6] flex items-center gap-1 font-medium">
+                              <Layers className="h-3 w-3 text-[#0091ae]" />
+                              {item.sequenceTitle} (Step {item.stepNumber})
+                            </span>
+                          )}
                         </div>
+
+                        {/* Message Preview Box (only for active sequence messages/follow-ups) */}
+                        {!isCadenceNeeded && personalizedMsg && (
+                          <div className="rounded-md border border-[#e2e8f0] bg-[#f8fafc] p-2.5 sm:p-3 text-xs text-[#33475b] relative group/msg">
+                            <div className="flex items-center justify-between mb-1 pb-1 border-b border-[#eef2f6]">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-[#0091ae] flex items-center gap-1.5">
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#0091ae]" />
+                                {item.type === 'followup'
+                                  ? `Follow-up Message (Step ${item.stepNumber})`
+                                  : item.stepTitle && !item.stepTitle.toLowerCase().includes('wait')
+                                  ? `Sequence Step ${item.stepNumber}: ${item.stepTitle}`
+                                  : `Follow-up Message (Step ${item.stepNumber})`}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyMessage(item)}
+                                className="flex items-center gap-1 text-[11px] font-semibold text-[#0091ae] hover:text-[#007a93] transition-colors cursor-pointer"
+                              >
+                                {isCopied ? (
+                                  <>
+                                    <Check className="h-3 w-3 text-emerald-600" />
+                                    <span className="text-emerald-600">Copied!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="h-3 w-3" />
+                                    <span>Copy Message</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            <p className="font-mono text-[11px] text-[#33475b] leading-relaxed whitespace-pre-wrap font-medium">
+                              {personalizedMsg}
+                            </p>
+                          </div>
+                        )}
 
                         {/* Contact details pills */}
                         <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#7c98b6] pt-1">
@@ -880,59 +925,83 @@ export function SDRDashboardView() {
 
                     {/* Right: Direct Outreach & Cadence Actions */}
                     <div className="flex flex-row lg:flex-col items-center lg:items-end justify-between lg:justify-start gap-2 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-[#f0f4f8]">
-                      {/* Action 1: Open LinkedIn Profile */}
-                      <button
-                        type="button"
-                        onClick={() => handleOpenLinkedIn(item.lead.linkedinUrl)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-[#0077b5] bg-[#0077b5]/10 hover:bg-[#0077b5]/20 transition-colors cursor-pointer"
-                        title="Open LinkedIn profile in new tab"
-                      >
-                        <Linkedin className="h-3.5 w-3.5" />
-                        <span>Open LinkedIn</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </button>
-
-                      {!item.isCompleted ? (
+                      {isCadenceNeeded ? (
+                        /* Cadence Needed: ONLY Open LinkedIn + Assign Cadence. NO Reschedule, NO Log Reply, NO Mark Sent! */
                         <>
-                          {/* Action 2: Mark Sent / Done */}
                           <button
                             type="button"
-                            onClick={() => handleMarkSent(item)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-white bg-[#0091ae] hover:bg-[#007a93] transition-colors shadow-xs cursor-pointer"
-                            title="Mark message sent and advance sequence cadence"
+                            onClick={() => handleOpenLinkedIn(item.lead.linkedinUrl)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-[#0077b5] bg-[#0077b5]/10 hover:bg-[#0077b5]/20 transition-colors cursor-pointer"
+                            title="Open LinkedIn profile in new tab"
                           >
-                            <Check className="h-3.5 w-3.5" />
-                            <span>Mark Sent</span>
+                            <Linkedin className="h-3.5 w-3.5" />
+                            <span>Open LinkedIn</span>
+                            <ExternalLink className="h-3 w-3" />
                           </button>
 
-                          {/* Action 3: Reschedule */}
-                          {item.task && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReschedulingTask(item.task || null);
-                                setRescheduleDate(item.dueDate);
-                              }}
-                              className="text-[11px] font-semibold text-[#516f90] hover:text-[#2d3e50] hover:underline"
-                            >
-                              Reschedule
-                            </button>
-                          )}
-
-                          {/* Action 4: Log Reply */}
-                          <button
-                            type="button"
-                            onClick={() => setReplyLead({ lead: item.lead, task: item.task })}
-                            className="text-[11px] font-semibold text-[#ff7a59] hover:text-[#e06545] hover:underline"
+                          <Link
+                            href={ROUTES.LEAD_DETAIL(item.lead.id)}
+                            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-md font-semibold text-xs text-white bg-[#ff7a59] hover:bg-[#e06545] transition-colors shadow-xs cursor-pointer"
+                            title="Assign or customize follow-up sequence"
                           >
-                            Log Reply
-                          </button>
+                            <Layers className="h-3.5 w-3.5" />
+                            <span>Assign Cadence</span>
+                          </Link>
                         </>
                       ) : (
-                        <div className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
-                          <CheckCircle2 className="h-4 w-4" />
-                          <span>Sent &amp; Logged</span>
-                        </div>
+                        /* Standard task actions */
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenLinkedIn(item.lead.linkedinUrl)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-[#0077b5] bg-[#0077b5]/10 hover:bg-[#0077b5]/20 transition-colors cursor-pointer"
+                            title="Open LinkedIn profile in new tab"
+                          >
+                            <Linkedin className="h-3.5 w-3.5" />
+                            <span>Open LinkedIn</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </button>
+
+                          {!item.isCompleted ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleMarkSent(item)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-white bg-[#0091ae] hover:bg-[#007a93] transition-colors shadow-xs cursor-pointer"
+                                title="Mark message sent and advance sequence cadence"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                <span>Mark Sent</span>
+                              </button>
+
+                              {item.task && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReschedulingTask(item.task || null);
+                                    setRescheduleDate(item.dueDate);
+                                  }}
+                                  className="text-[11px] font-semibold text-[#516f90] hover:text-[#2d3e50] hover:underline cursor-pointer"
+                                >
+                                  Reschedule
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => setReplyLead({ lead: item.lead, task: item.task })}
+                                className="text-[11px] font-semibold text-[#ff7a59] hover:text-[#e06545] hover:underline cursor-pointer"
+                              >
+                                Log Reply
+                              </button>
+                            </>
+                          ) : (
+                            <div className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                              <CheckCircle2 className="h-4 w-4" />
+                              <span>Sent &amp; Logged</span>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

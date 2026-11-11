@@ -53,6 +53,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnAdd               = $('btn-add');
   const leadForm             = $('lead-form');
 
+  // Outreach & Cadence Elements
+  const tabModeApproved       = $('tab-mode-approved');
+  const tabModeCustom         = $('tab-mode-custom');
+  const sectionApprovedSeq    = $('section-approved-seq');
+  const sectionCustomSeq      = $('section-custom-seq');
+  const seqSelect             = $('seq-select');
+  const step1PreviewBox       = $('step1-preview-box');
+  const step1NoteText         = $('step1-note-text');
+  const btnCopyNote           = $('btn-copy-note');
+  const chkConnSentApproved   = $('chk-conn-sent-approved');
+  const customConnNote        = $('custom-conn-note');
+  const charCountVal          = $('char-count-val');
+  const chkFinishCadenceLater = $('chk-finish-cadence-later');
+  const customStepsContainer  = $('custom-steps-container');
+  const customStep2Delay      = $('custom-step2-delay');
+  const customStep2Msg        = $('custom-step2-msg');
+  const customStep3Delay      = $('custom-step3-delay');
+  const customStep3Msg        = $('custom-step3-msg');
+
+  let activeOutreachMode = 'approved'; // 'approved' | 'custom'
+  let cachedSequences = [];
+
   // Clean / normalize URL
   function cleanUrl(url) {
     if (!url) return 'http://localhost:3000';
@@ -230,6 +252,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         dupeWarn.style.display = 'none';
       }
+
+      updateStep1Preview();
     } catch (err) {
       console.error('[LeadFlow] Execution error:', err);
       cardName.innerText = 'Manual entry required';
@@ -282,7 +306,162 @@ document.addEventListener('DOMContentLoaded', async () => {
     viewEmpty.style.display = 'none';
     viewLead.style.display  = 'block';
 
+    await loadApprovedSequences();
     await runScrape(tab);
+  }
+
+  // Fetch approved sequences for dropdown
+  async function loadApprovedSequences() {
+    if (!lfToken) return;
+    try {
+      const targetUrl = cleanUrl(apiEndpoint);
+      const resp = await fetch(`${targetUrl}/api/sequences`, {
+        headers: {
+          'Authorization': `Bearer ${lfToken}`,
+          'x-workspace-id': lfUser?.workspaceId || '',
+        }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const seqs = data.sequences || [];
+        // Filter approved or active sequences
+        cachedSequences = seqs.filter(s => s.approvalStatus === 'approved' || s.status === 'active');
+      }
+    } catch (e) {
+      console.warn('[LeadFlow] Could not fetch sequences:', e);
+    }
+
+    // Default fallback if no sequences online
+    if (!cachedSequences || cachedSequences.length === 0) {
+      cachedSequences = [
+        {
+          id: 'seq_linkedin_default',
+          name: 'Standard LinkedIn 4-Step Outbound',
+          steps: [
+            {
+              stepNumber: 1,
+              actionType: 'connect',
+              title: 'Send Connection Request',
+              messageTemplate: 'Hi {{firstName}}, noticed your leadership at {{company}} and would love to connect and share some insights!',
+            },
+            {
+              stepNumber: 2,
+              actionType: 'send_message',
+              title: 'First Follow-up',
+              delayDays: 3,
+              messageTemplate: 'Hi {{firstName}}, thanks for connecting! Wanted to share how we help companies like {{company}} optimize outreach.',
+            }
+          ]
+        }
+      ];
+    }
+
+    if (seqSelect) {
+      const currentVal = seqSelect.value;
+      seqSelect.innerHTML = '<option value="">-- Choose Sequence --</option>';
+      cachedSequences.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${(s.steps || []).length} steps)`;
+        seqSelect.appendChild(opt);
+      });
+
+      if (currentVal && cachedSequences.some(s => s.id === currentVal)) {
+        seqSelect.value = currentVal;
+      } else if (cachedSequences.length > 0) {
+        seqSelect.value = cachedSequences[0].id;
+      }
+      updateStep1Preview();
+    }
+  }
+
+  // Render Step 1 connection note template with live variable replacement
+  function updateStep1Preview() {
+    if (!seqSelect || !step1PreviewBox || !step1NoteText) return;
+    const selectedSeqId = seqSelect.value;
+    const seq = cachedSequences.find(s => s.id === selectedSeqId);
+    if (!seq || !seq.steps || seq.steps.length === 0) {
+      step1PreviewBox.style.display = 'none';
+      return;
+    }
+
+    const firstStep = seq.steps[0];
+    const template = firstStep.messageTemplate || '';
+    if (!template.trim()) {
+      step1PreviewBox.style.display = 'none';
+      return;
+    }
+
+    const fName = firstNameEl.value.trim() || 'there';
+    const comp  = companyEl.value.trim()   || 'your company';
+    const role  = jobTitleEl.value.trim()  || 'your role';
+
+    const rendered = template
+      .replace(/\{\{\s*firstName\s*\}\}/gi, fName)
+      .replace(/\{\{\s*first_name\s*\}\}/gi, fName)
+      .replace(/\{\{\s*company\s*\}\}/gi, comp)
+      .replace(/\{\{\s*companyName\s*\}\}/gi, comp)
+      .replace(/\{\{\s*jobTitle\s*\}\}/gi, role)
+      .replace(/\{\{\s*title\s*\}\}/gi, role);
+
+    step1NoteText.innerText = rendered;
+    step1PreviewBox.style.display = 'block';
+  }
+
+  // Outreach mode tabs toggling
+  if (tabModeApproved && tabModeCustom) {
+    tabModeApproved.addEventListener('click', () => {
+      activeOutreachMode = 'approved';
+      tabModeApproved.classList.add('active');
+      tabModeCustom.classList.remove('active');
+      if (sectionApprovedSeq) sectionApprovedSeq.style.display = 'block';
+      if (sectionCustomSeq)   sectionCustomSeq.style.display = 'none';
+    });
+
+    tabModeCustom.addEventListener('click', () => {
+      activeOutreachMode = 'custom';
+      tabModeCustom.classList.add('active');
+      tabModeApproved.classList.remove('active');
+      if (sectionCustomSeq)   sectionCustomSeq.style.display = 'block';
+      if (sectionApprovedSeq) sectionApprovedSeq.style.display = 'none';
+    });
+  }
+
+  if (seqSelect) {
+    seqSelect.addEventListener('change', updateStep1Preview);
+  }
+  if (firstNameEl) firstNameEl.addEventListener('input', updateStep1Preview);
+  if (companyEl)   companyEl.addEventListener('input', updateStep1Preview);
+  if (jobTitleEl)  jobTitleEl.addEventListener('input', updateStep1Preview);
+
+  // Copy Step 1 note to clipboard
+  if (btnCopyNote && step1NoteText) {
+    btnCopyNote.addEventListener('click', async () => {
+      const text = step1NoteText.innerText;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const originalText = btnCopyNote.innerText;
+        btnCopyNote.innerText = '✓ Copied!';
+        setTimeout(() => { btnCopyNote.innerText = originalText; }, 1800);
+      } catch (err) {
+        console.warn('Clipboard write error:', err);
+      }
+    });
+  }
+
+  // Custom connection note char counter
+  if (customConnNote && charCountVal) {
+    customConnNote.addEventListener('input', () => {
+      charCountVal.innerText = customConnNote.value.length;
+    });
+  }
+
+  // Finish cadence later toggle
+  if (chkFinishCadenceLater && customStepsContainer) {
+    chkFinishCadenceLater.addEventListener('change', () => {
+      customStepsContainer.style.display = chkFinishCadenceLater.checked ? 'none' : 'block';
+    });
   }
 
   // Refresh button handler
@@ -315,6 +494,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     banner.className = 'banner';
     banner.style.display = 'none';
 
+    const isApprovedMode = (activeOutreachMode === 'approved');
+    let sequencePayload = {};
+
+    if (isApprovedMode) {
+      const selectedSeq = cachedSequences.find(s => s.id === seqSelect?.value);
+      const isSent = chkConnSentApproved ? chkConnSentApproved.checked : true;
+      const note = (step1PreviewBox && step1PreviewBox.style.display !== 'none') ? step1NoteText.innerText : null;
+
+      sequencePayload = {
+        sequenceMode: 'approved',
+        sequenceId: selectedSeq?.id || null,
+        sequenceName: selectedSeq?.name || null,
+        connectionStatus: isSent ? 'request_sent' : 'not_started',
+        connectionNote: note,
+        notes: note ? `Connection note: ${note}` : null,
+        isConnectionSent: isSent,
+        outreachStatus: isSent ? 'in_sequence' : (selectedSeq ? 'in_sequence' : 'unassigned'),
+      };
+    } else {
+      const note = customConnNote ? customConnNote.value.trim() : '';
+      const finishLater = chkFinishCadenceLater ? chkFinishCadenceLater.checked : true;
+      const customSteps = !finishLater ? [
+        {
+          stepNumber: 1,
+          actionType: 'connection_request',
+          delayDays: 0,
+          messageTemplate: note || '',
+          title: 'Connection Request',
+        },
+        {
+          stepNumber: 2,
+          actionType: 'send_message',
+          delayDays: parseInt(customStep2Delay?.value || '3', 10) || 3,
+          messageTemplate: customStep2Msg?.value.trim() || '',
+          title: 'First Follow-up',
+        },
+        ...(customStep3Msg?.value.trim() ? [{
+          stepNumber: 3,
+          actionType: 'send_message',
+          delayDays: parseInt(customStep3Delay?.value || '7', 10) || 7,
+          messageTemplate: customStep3Msg.value.trim(),
+          title: 'Second Follow-up',
+        }] : [])
+      ] : [];
+
+      sequencePayload = {
+        sequenceMode: 'custom',
+        connectionStatus: note ? 'request_sent' : 'not_started',
+        connectionNote: note || null,
+        notes: note ? `Connection note: ${note}` : null,
+        isConnectionSent: Boolean(note),
+        finishCadenceLater: finishLater,
+        outreachStatus: finishLater ? 'needs_sequence' : 'pending_sequence_approval',
+        customSteps,
+      };
+    }
+
     const leadPayload = {
       firstName:   firstNameEl.value.trim(),
       lastName:    lastNameEl.value.trim(),
@@ -325,6 +561,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       status:      'NEW',
       capturedBy:  lfUser?.email || '',
       workspaceId: lfUser?.workspaceId || '',
+      ...sequencePayload,
     };
 
     try {

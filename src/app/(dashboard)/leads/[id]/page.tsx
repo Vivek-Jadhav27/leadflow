@@ -28,6 +28,8 @@ import {
   Check,
   CalendarCheck,
   XCircle,
+  Plus,
+  Layers,
   HelpCircle,
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
@@ -39,7 +41,7 @@ import { Button } from '@/components/ui/button';
 import { AddLeadDrawer } from '@/components/leads/AddLeadDrawer';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { formatDate, formatDateTime } from '@/utils/date';
-import { EnrichedData, ConnectionStatus, LeadOutcome, ActivityEvent } from '@/types/crm';
+import { EnrichedData, ConnectionStatus, LeadOutcome, ActivityEvent, Sequence, SequenceStep } from '@/types/crm';
 import { toast } from 'sonner';
 
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -53,6 +55,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     sequences,
     settings,
     team,
+    tasks,
     activities,
     updateLead,
     deleteLead,
@@ -61,10 +64,16 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     markReply,
     advanceLeadStep,
     assignSequenceToLead,
+    saveSequence,
+    approveSequence,
     addActivityEvent,
   } = useCRM();
 
-  const lead = leads.find((l) => l.id === id);
+  const lead = React.useMemo(() => {
+    const direct = leads.find((l) => l.id === id);
+    if (direct) return direct;
+    return leads.find((l) => l.activityHistory?.some((a) => a.id?.includes(id)));
+  }, [leads, id]);
 
   // Combine stored lead activity history with global activity log
   const leadActivities = React.useMemo(() => {
@@ -72,14 +81,195 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     if (lead?.activityHistory && Array.isArray(lead.activityHistory)) {
       lead.activityHistory.forEach((a) => map.set(a.id, a));
     }
-    activities.filter((a) => a.leadId === id).forEach((a) => map.set(a.id, a));
+    activities.filter((a) => a.leadId === id || (lead && a.leadId === lead.id)).forEach((a) => map.set(a.id, a));
 
     return Array.from(map.values()).sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
-  }, [lead?.activityHistory, activities, id]);
+  }, [lead?.activityHistory, lead?.id, activities, id]);
 
-  const sequence = lead?.sequenceId ? sequences.find((s) => s.id === lead.sequenceId) : null;
+  // Resolve connection note from direct field, matching sibling leads, activity history, tasks, or notes
+  const connectionNoteSent = React.useMemo(() => {
+    // 1. Direct field on current lead
+    if (lead?.connectionNote && lead.connectionNote.trim()) {
+      return lead.connectionNote.trim();
+    }
+
+    // 2. Check sibling leads in store matching same LinkedIn URL or same Name
+    if (lead) {
+      const norm = (u: string) => (u || '').toLowerCase().replace(/\/+$/, '').trim();
+      const currentUrl = norm(lead.linkedinUrl);
+      const sibling = leads.find((l) => {
+        if (l.id === lead.id) return false;
+        if (currentUrl && norm(l.linkedinUrl) === currentUrl) return true;
+        if (
+          lead.firstName &&
+          lead.lastName &&
+          l.firstName?.toLowerCase().trim() === lead.firstName.toLowerCase().trim() &&
+          l.lastName?.toLowerCase().trim() === lead.lastName.toLowerCase().trim()
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (sibling?.connectionNote && sibling.connectionNote.trim()) {
+        return sibling.connectionNote.trim();
+      }
+    }
+
+    // 3. Check activities for this lead
+    const connectAct = (activities || []).find((a) => {
+      const isMatch =
+        a.leadId === id ||
+        (lead && a.leadId === lead.id) ||
+        (lead && a.leadName?.toLowerCase() === `${lead.firstName} ${lead.lastName}`.toLowerCase());
+      return (
+        isMatch &&
+        (a.type === 'linkedin_connect' || a.title?.toLowerCase().includes('connection')) &&
+        a.description &&
+        a.description.trim()
+      );
+    });
+    if (connectAct && connectAct.description?.trim()) {
+      return connectAct.description.trim();
+    }
+
+    // 4. Check tasks for connection note snippet
+    const taskWithNote = (tasks || []).find((t) => {
+      const isMatch =
+        t.leadId === id ||
+        (lead && t.leadId === lead.id) ||
+        (lead && t.leadName?.toLowerCase() === `${lead.firstName} ${lead.lastName}`.toLowerCase());
+      return isMatch && t.notes && (t.notes.includes('Connection sent with note:') || t.notes.includes('Connection note:'));
+    });
+    if (taskWithNote && taskWithNote.notes) {
+      const m1 = taskWithNote.notes.match(/Connection sent with note:\s*"?([^"]+)"?/i);
+      if (m1 && m1[1]) return m1[1].trim();
+      const m2 = taskWithNote.notes.match(/Connection note:\s*"?([^"]+)"?/i);
+      if (m2 && m2[1]) return m2[1].trim();
+    }
+
+    // 5. Check lead notes
+    if (lead?.notes) {
+      const n = lead.notes;
+      const m1 = n.match(/connection sent with note:\s*"?([^"]+)"?/i);
+      if (m1 && m1[1]) return m1[1].trim();
+      const m2 = n.match(/connection note:\s*"?([^"]+)"?/i);
+      if (m2 && m2[1]) return m2[1].trim();
+      if (
+        !n.startsWith('Added to') &&
+        !n.startsWith('Imported via') &&
+        !n.startsWith('Captured from') &&
+        n.length > 10
+      ) {
+        return n.trim();
+      }
+    }
+
+    return null;
+  }, [lead, leads, activities, tasks, id]);
+
+  const sequence = React.useMemo(() => {
+    if (lead?.sequenceId) {
+      const found = sequences.find((s) => s.id === lead.sequenceId);
+      if (found) {
+        // Ensure Step 1 has actual connection note if available
+        if (connectionNoteSent && found.steps?.[0]) {
+          const first = found.steps[0];
+          if (!first.messageTemplate || first.messageTemplate.includes('Connection request sent')) {
+            found.steps[0] = { ...first, messageTemplate: connectionNoteSent };
+          }
+        }
+        return found;
+      }
+    }
+    const customFound = sequences.find(
+      (s) => s.id === `seq_custom_${lead?.id}` || (lead && s.name?.includes(`${lead.firstName} ${lead.lastName}`))
+    );
+    if (customFound) {
+      if (connectionNoteSent && customFound.steps?.[0]) {
+        const first = customFound.steps[0];
+        if (!first.messageTemplate || first.messageTemplate.includes('Connection request sent')) {
+          customFound.steps[0] = { ...first, messageTemplate: connectionNoteSent };
+        }
+      }
+      return customFound;
+    }
+
+    // If lead is awaiting sequence approval or has a custom sequence assigned, construct from customSteps or fallback
+    if (lead && (lead.outreachStatus === 'pending_sequence_approval' || (lead.sequenceId && lead.sequenceMode === 'custom'))) {
+      const seqId = lead.sequenceId || `seq_custom_${lead.id}`;
+
+      let stepsToUse: SequenceStep[] = [];
+      if (lead.customSteps && Array.isArray(lead.customSteps) && lead.customSteps.length > 0) {
+        stepsToUse = lead.customSteps.map((s: any) => {
+          if (s.stepNumber === 1 || s.actionType === 'connection_request') {
+            return {
+              id: `step_${seqId}_1`,
+              stepNumber: 1,
+              actionType: 'connection_request' as const,
+              title: s.title || 'Connection Request',
+              delayDays: 0,
+              messageTemplate: connectionNoteSent || s.messageTemplate || 'Connection request sent on LinkedIn',
+              enabled: true,
+            };
+          }
+          return {
+            id: `step_${seqId}_${s.stepNumber}`,
+            stepNumber: s.stepNumber,
+            actionType: 'send_message' as const,
+            title: s.title || `Follow-up ${s.stepNumber - 1}`,
+            delayDays: s.delayDays || (s.stepNumber === 2 ? 3 : 7),
+            messageTemplate: s.messageTemplate || '',
+            enabled: true,
+          };
+        });
+      } else {
+        stepsToUse = [
+          {
+            id: `step_${seqId}_1`,
+            stepNumber: 1,
+            actionType: 'connection_request' as const,
+            title: 'Connection Request',
+            delayDays: 0,
+            messageTemplate: connectionNoteSent || 'Connection request sent on LinkedIn',
+            enabled: true,
+          },
+          {
+            id: `step_${seqId}_2`,
+            stepNumber: 2,
+            actionType: 'send_message' as const,
+            title: 'First Follow-up',
+            delayDays: 3,
+            messageTemplate: `Hi ${lead.firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${lead.company} optimize outbound sales outreach.`,
+            enabled: true,
+          },
+          {
+            id: `step_${seqId}_3`,
+            stepNumber: 3,
+            actionType: 'send_message' as const,
+            title: 'Second Follow-up',
+            delayDays: 7,
+            messageTemplate: `Hi ${lead.firstName}, following up on my previous message. Wanted to see if you had 5 minutes this week for a brief conversation?`,
+            enabled: true,
+          },
+        ];
+      }
+
+      return {
+        id: seqId,
+        name: lead.sequenceName || `Custom Cadence: ${lead.firstName} ${lead.lastName}`,
+        channel: 'linkedin' as const,
+        description: `Custom outreach cadence for ${lead.firstName} ${lead.lastName} at ${lead.company}`,
+        approvalStatus: 'pending' as const,
+        status: 'pending_approval' as const,
+        workspaceId: lead.workspaceId || null,
+        createdBy: lead.assignedToName || 'Outbound SDR',
+        steps: stepsToUse,
+      };
+    }
+    return null;
+  }, [lead, sequences, connectionNoteSent]);
 
   // Handle Admin changing sequence start date
   const handleRescheduleStartDate = (newDate: string) => {
@@ -266,6 +456,125 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [replyText, setReplyText] = useState('');
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [selectedSeqToAssign, setSelectedSeqToAssign] = useState<string>('');
+
+  // Custom Sequence Builder state
+  const [isCreateSeqOpen, setIsCreateSeqOpen] = useState(false);
+  const [customSeqName, setCustomSeqName] = useState('');
+  const [step2Delay, setStep2Delay] = useState(3);
+  const [step2Message, setStep2Message] = useState('');
+  const [step3Delay, setStep3Delay] = useState(7);
+  const [step3Message, setStep3Message] = useState('');
+  const [isSubmittingCustomSeq, setIsSubmittingCustomSeq] = useState(false);
+
+  const openCustomSeqModal = () => {
+    if (lead) {
+      setCustomSeqName(`Custom Cadence: ${lead.firstName} ${lead.lastName}`);
+      setStep2Delay(3);
+      setStep2Message(
+        `Hi ${lead.firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${lead.company} optimize outbound sales outreach.`
+      );
+      setStep3Delay(7);
+      setStep3Message(
+        `Hi ${lead.firstName}, following up on my previous message. Wanted to see if you had 5 minutes this week for a brief conversation?`
+      );
+    }
+    setIsCreateSeqOpen(true);
+  };
+
+  const handleCreateCustomSequence = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lead) return;
+    setIsSubmittingCustomSeq(true);
+
+    try {
+      const seqId = `seq_custom_${lead.id}_${Date.now()}`;
+      const seqSteps: SequenceStep[] = [
+        {
+          id: `step_${seqId}_1`,
+          stepNumber: 1,
+          actionType: 'connection_request',
+          title: 'Connection Request',
+          delayDays: 0,
+          messageTemplate: connectionNoteSent || 'Connection request sent manually on LinkedIn',
+          enabled: true,
+        },
+        {
+          id: `step_${seqId}_2`,
+          stepNumber: 2,
+          actionType: 'send_message',
+          title: 'First Follow-up',
+          delayDays: Number(step2Delay) || 3,
+          messageTemplate: step2Message.trim(),
+          enabled: true,
+        },
+      ];
+
+      if (step3Message.trim()) {
+        seqSteps.push({
+          id: `step_${seqId}_3`,
+          stepNumber: 3,
+          actionType: 'send_message',
+          title: 'Second Follow-up',
+          delayDays: Number(step3Delay) || 7,
+          messageTemplate: step3Message.trim(),
+          enabled: true,
+        });
+      }
+
+      const newSeq: Sequence = {
+        id: seqId,
+        name: customSeqName.trim() || `Custom Cadence: ${lead.firstName} ${lead.lastName}`,
+        channel: 'linkedin',
+        description: `Custom outreach cadence created by ${user?.email || 'SDR'} for ${lead.firstName} ${lead.lastName} at ${lead.company}.`,
+        steps: seqSteps,
+        status: 'pending_approval',
+        approvalStatus: 'pending',
+        workspaceId: lead.workspaceId || null,
+        createdBy: user?.email || 'Outbound SDR',
+        createdByUid: user?.uid || null,
+        createdByRole: isAdmin ? 'admin' : 'sdr',
+        targetRole: 'sdr',
+        isCustom: true,
+        targetLeadId: lead.id,
+        targetLeadName: `${lead.firstName} ${lead.lastName}`,
+        targetLeadCompany: lead.company,
+        targetLeadLinkedin: lead.linkedinUrl,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveSequence(newSeq);
+
+      updateLead(lead.id, {
+        sequenceId: newSeq.id,
+        sequenceName: newSeq.name,
+        currentStepNumber: 2,
+        totalSteps: seqSteps.length,
+        outreachStatus: 'pending_sequence_approval',
+        nextActionTitle: 'Awaiting Admin Approval',
+        sequenceMode: 'custom',
+        customSteps: seqSteps,
+        connectionNote: connectionNoteSent || lead.connectionNote || null,
+      });
+
+      addActivityEvent({
+        leadId: lead.id,
+        leadName: `${lead.firstName} ${lead.lastName}`,
+        type: 'sequence_assigned',
+        title: 'Custom Cadence Submitted for Admin Approval',
+        description: `Bespoke ${seqSteps.length}-step sequence "${newSeq.name}" submitted for Admin approval by ${user?.email || 'SDR'}.`,
+        actorName: user?.displayName || user?.email || 'Outbound SDR',
+        timestamp: new Date().toISOString(),
+      });
+
+      setIsCreateSeqOpen(false);
+      toast.success(`✓ Sequence "${newSeq.name}" submitted for Admin approval!`);
+    } catch (err: any) {
+      toast.error('Failed to submit sequence: ' + err?.message);
+    } finally {
+      setIsSubmittingCustomSeq(false);
+    }
+  };
 
   // Enrichment fields
   const [enrichPhone, setEnrichPhone] = useState(lead?.enrichedData?.phone || lead?.phone || '');
@@ -816,25 +1125,23 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             </div>
           </div>
 
-          {/* SDR & Account Info */}
-          <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
-              <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px]">
-                Account &amp; Assignment
-              </h3>
-              {isAdmin && (
+          {/* SDR & Account Info (Visible ONLY to Admin) */}
+          {isAdmin && (
+            <div className="rounded-lg border border-[#dfe3eb] bg-white p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
+                <h3 className="font-bold text-[#33475b] uppercase tracking-wider text-[11px]">
+                  Account &amp; Assignment
+                </h3>
                 <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
                   Admin Manageable
                 </span>
-              )}
-            </div>
+              </div>
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
-                  Assigned Representative (SDR)
-                </span>
-                {isAdmin ? (
+              <div className="space-y-3 text-xs">
+                <div>
+                  <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
+                    Assigned Representative (SDR)
+                  </span>
                   <select
                     value={lead.assignedToId || ''}
                     onChange={(e) => {
@@ -872,29 +1179,24 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                       </option>
                     ))}
                   </select>
-                ) : (
-                  <div>
-                    <p className="font-bold text-[#33475b]">{lead.assignedToName || 'Unassigned'}</p>
-                    {lead.assignedToEmail && <p className="text-[11px] text-slate-500">{lead.assignedToEmail}</p>}
+                </div>
+
+                <div className="pt-2 border-t border-[#dfe3eb]">
+                  <span className="text-[10px] uppercase font-semibold text-slate-400">Captured Date</span>
+                  <p className="font-medium text-[#33475b] mt-0.5">{formatDate(lead.createdAt)}</p>
+                </div>
+
+                {lead.notes && (
+                  <div className="pt-2 border-t border-[#dfe3eb]">
+                    <span className="text-[10px] uppercase font-semibold text-slate-400">Internal SDR Notes</span>
+                    <p className="text-[11px] text-slate-700 bg-[#f5f8fa] p-2.5 rounded border border-[#dfe3eb] mt-1 whitespace-pre-wrap">
+                      {lead.notes}
+                    </p>
                   </div>
                 )}
               </div>
-
-              <div className="pt-2 border-t border-[#dfe3eb]">
-                <span className="text-[10px] uppercase font-semibold text-slate-400">Captured Date</span>
-                <p className="font-medium text-[#33475b] mt-0.5">{formatDate(lead.createdAt)}</p>
-              </div>
-
-              {lead.notes && (
-                <div className="pt-2 border-t border-[#dfe3eb]">
-                  <span className="text-[10px] uppercase font-semibold text-slate-400">Internal SDR Notes</span>
-                  <p className="text-[11px] text-slate-700 bg-[#f5f8fa] p-2.5 rounded border border-[#dfe3eb] mt-1 whitespace-pre-wrap">
-                    {lead.notes}
-                  </p>
-                </div>
-              )}
             </div>
-          </div>
+          )}
         </div>
 
         {/* Center Column (2 spans): Sequence Cadence & Manual Message Actions */}
@@ -985,43 +1287,115 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
               </div>
 
+              {/* Connection Note Display */}
+              {connectionNoteSent && (
+                <div className="rounded-lg border border-orange-200 bg-orange-50/60 p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-orange-900 flex items-center gap-1.5">
+                      <Linkedin className="h-3.5 w-3.5 text-[#0077b5]" />
+                      Connection Note Sent on LinkedIn
+                    </span>
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                      ✓ Sent Manually
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-700 italic bg-white/80 p-2.5 rounded border border-orange-100">
+                    &ldquo;{connectionNoteSent}&rdquo;
+                  </p>
+                </div>
+              )}
+
+
+
+              {/* Pending Sequence Approval Banner */}
+              {(lead.outreachStatus === 'pending_sequence_approval' || (sequence && sequence.approvalStatus === 'pending')) && (
+                <div className="rounded-lg border border-blue-300 bg-blue-50 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 text-blue-700" />
+                      <h4 className="font-bold text-xs text-blue-900">Custom Cadence Awaiting Admin Approval</h4>
+                    </div>
+                    <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full uppercase">
+                      Approval Pending
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-800">
+                    This lead was assigned a customized follow-up cadence. Steps are paused until an administrator reviews and approves the sequence.
+                  </p>
+                  {isAdmin && sequence && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        approveSequence(sequence.id);
+                        updateLead(lead.id, {
+                          outreachStatus: 'in_sequence',
+                          nextActionTitle: sequence.steps?.[1]?.title || 'Step 2: Follow-up 1',
+                        });
+                        toast.success(`✓ Sequence "${sequence.name}" approved! Follow-up tasks are now active.`);
+                      }}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 cursor-pointer gap-1.5"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      <span>Approve & Activate Cadence</span>
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {/* Step Sequence Timeline or Empty Enrollment Card */}
-              {!sequence ? (
-                <div className="p-6 rounded-lg border border-dashed border-[#cbd6e2] bg-[#f8fafc] text-center space-y-3">
+              {(!sequence || lead.outreachStatus === 'needs_sequence') ? (
+                <div className="p-6 rounded-lg border border-dashed border-[#cbd6e2] bg-[#f8fafc] text-center space-y-4">
                   <div className="h-10 w-10 rounded-full bg-[#e5f5f8] text-[#0091ae] flex items-center justify-center mx-auto">
                     <Linkedin className="h-5 w-5" />
                   </div>
                   <div>
                     <h4 className="font-bold text-[#2d3e50] text-sm">No Outreach Sequence Assigned</h4>
                     <p className="text-xs text-[#516f90] max-w-md mx-auto mt-0.5">
-                      Assign {lead.firstName} to an active LinkedIn sequence cadence to schedule outreach tasks and start follow-ups.
+                      Assign an approved team cadence or create a custom follow-up sequence for {lead.firstName} and submit for Admin approval.
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-md mx-auto pt-2">
-                    <select
-                      value={selectedSeqToAssign}
-                      onChange={(e) => setSelectedSeqToAssign(e.target.value)}
-                      className="px-3 py-1.5 text-xs rounded border border-[#cbd6e2] bg-white text-[#2d3e50] focus:border-[#ff7a59] focus:outline-hidden"
-                    >
-                      <option value="">Choose a Sequence...</option>
-                      {sequences.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} ({s.steps.length} steps) {s.approvalStatus === 'approved' ? '✓ Approved' : ''}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1 max-w-xl mx-auto">
+                    {/* Option 1: Pre-Approved dropdown */}
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                      <select
+                        value={selectedSeqToAssign}
+                        onChange={(e) => setSelectedSeqToAssign(e.target.value)}
+                        className="px-2.5 py-1.5 text-xs rounded border border-[#cbd6e2] bg-white text-[#2d3e50] focus:border-[#ff7a59] focus:outline-hidden flex-1 sm:w-52"
+                      >
+                        <option value="">Choose Approved Cadence...</option>
+                        {sequences
+                          .filter((s) => s.approvalStatus === 'approved' || s.status === 'active')
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} ({s.steps.length} steps)
+                            </option>
+                          ))}
+                      </select>
 
+                      <Button
+                        size="sm"
+                        disabled={!selectedSeqToAssign}
+                        onClick={() => {
+                          assignSequenceToLead(lead.id, selectedSeqToAssign);
+                          setSelectedSeqToAssign('');
+                        }}
+                        className="h-8 text-xs bg-[#0091ae] hover:bg-[#007a93] text-white font-semibold shadow-xs cursor-pointer"
+                      >
+                        <span>Enroll</span>
+                      </Button>
+                    </div>
+
+                    <span className="text-xs text-slate-400 font-bold px-1 hidden sm:inline">OR</span>
+
+                    {/* Option 2: Create Custom Sequence for this Lead */}
                     <Button
                       size="sm"
-                      disabled={!selectedSeqToAssign}
-                      onClick={() => {
-                        assignSequenceToLead(lead.id, selectedSeqToAssign);
-                        setSelectedSeqToAssign('');
-                      }}
-                      className="h-8 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold shadow-xs cursor-pointer"
+                      onClick={openCustomSeqModal}
+                      className="h-8 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold shadow-xs cursor-pointer gap-1.5 w-full sm:w-auto"
                     >
-                      <span>Enroll in Sequence</span>
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Create Sequence &amp; Request Approval</span>
                     </Button>
                   </div>
                 </div>
@@ -1045,11 +1419,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                           />
                         </div>
                       )}
-                      {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && (
+                      {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && lead.outreachStatus !== 'pending_sequence_approval' && (
                         <Button
                           size="sm"
                           onClick={handleAdvanceStep}
-                          className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold"
+                          className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer shadow-xs"
                         >
                           <Send className="h-3 w-3 mr-1" />
                           <span>Send Next LinkedIn Step</span>
@@ -1122,7 +1496,12 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
                                   {/* Scheduled Date Badge */}
                                   <div className="flex items-center gap-1.5 shrink-0">
-                                    {isCompleted ? (
+                                    {lead.outreachStatus === 'pending_sequence_approval' ? (
+                                      <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 border border-amber-200">
+                                        <Clock className="h-3 w-3 text-amber-600" />
+                                        <span>Pending Admin Approval</span>
+                                      </span>
+                                    ) : isCompleted ? (
                                       <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
                                         <Check className="h-3 w-3 text-emerald-600" />
                                         <span>Completed: {sched?.formatted || 'Done'}</span>
@@ -1188,12 +1567,25 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                 )}
 
                                 {/* Template (if applicable) */}
-                                {st.messageTemplate && (
+                                {st.stepNumber === 1 ? (
+                                  connectionNoteSent ? (
+                                    <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
+                                      <p className="font-mono text-[10px] text-slate-500 mb-0.5">Connection Note Sent:</p>
+                                      <p className="italic text-slate-800 leading-relaxed">&ldquo;{connectionNoteSent}&rdquo;</p>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-1.5 p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-500 italic">
+                                      (Connection request sent without note)
+                                    </div>
+                                  )
+                                ) : st.messageTemplate && (
                                   <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
                                     <p className="font-mono text-[10px] text-slate-500 mb-0.5">Template:</p>
-                                    {st.messageTemplate
-                                      .replace('{{firstName}}', lead.firstName)
-                                      .replace('{{company}}', lead.company)}
+                                    <p className="whitespace-pre-wrap leading-relaxed">
+                                      {st.messageTemplate
+                                        .replace(/\{\{firstName\}\}/gi, lead.firstName)
+                                        .replace(/\{\{company\}\}/gi, lead.company)}
+                                    </p>
                                   </div>
                                 )}
                               </div>
@@ -1426,6 +1818,166 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 <Button size="sm" type="submit" className="bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold">
                   Save Intelligence
                 </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create Custom Sequence & Send for Approval Modal */}
+      {isCreateSeqOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg border border-[#dfe3eb] p-6 max-w-lg w-full shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[#dfe3eb]">
+              <div>
+                <h3 className="font-bold text-[#2d3e50] text-sm flex items-center gap-1.5">
+                  <Layers className="h-4 w-4 text-[#ff7a59]" />
+                  <span>Create Custom Sequence for {lead.firstName} {lead.lastName}</span>
+                </h3>
+                <p className="text-xs text-[#516f90] mt-0.5">
+                  Design bespoke follow-up steps. Will be submitted to Admin for review and approval.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreateSeqOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Target Lead Context Banner */}
+            <div className="rounded-md border border-[#dfe3eb] bg-[#f8fafc] p-3 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-[#2d3e50]">{lead.firstName} {lead.lastName}</span>
+                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  Connection: Request Sent
+                </span>
+              </div>
+              <p className="text-[11px] text-[#516f90]">{lead.jobTitle} at {lead.company}</p>
+            </div>
+
+            <form onSubmit={handleCreateCustomSequence} className="space-y-4 text-xs">
+              {/* Sequence Name */}
+              <div className="space-y-1">
+                <label className="font-semibold text-[#33475b]">Sequence Name</label>
+                <input
+                  type="text"
+                  required
+                  value={customSeqName}
+                  onChange={(e) => setCustomSeqName(e.target.value)}
+                  placeholder="e.g. Bespoke Cadence: Allan Brisbane"
+                  className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:border-[#ff7a59] focus:outline-none"
+                />
+              </div>
+
+              {/* Step 1: Connection Request (Completed) */}
+              <div className="rounded-md border border-[#e2e8f0] bg-slate-50 p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[11px] text-[#33475b] flex items-center gap-1.5">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    Step 1: Connection Request (Sent on LinkedIn)
+                  </span>
+                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    Done
+                  </span>
+                </div>
+                {connectionNoteSent ? (
+                  <div className="mt-2 pt-2 border-t border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Connection Note Sent:
+                    </span>
+                    <p className="text-xs text-slate-700 bg-white p-2.5 rounded border border-slate-200 italic leading-relaxed">
+                      &ldquo;{connectionNoteSent}&rdquo;
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500 italic mt-1">
+                    (Connection request sent without note)
+                  </p>
+                )}
+              </div>
+
+              {/* Step 2: First Follow-up */}
+              <div className="space-y-2 border border-[#dfe3eb] rounded-md p-3 bg-white">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-[#2d3e50] text-[11px]">
+                    Step 2: First Follow-up Message
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-slate-500 font-medium">Delay (days after connect):</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={step2Delay}
+                      onChange={(e) => setStep2Delay(Number(e.target.value))}
+                      className="w-14 rounded border border-[#cbd6e2] px-2 py-0.5 text-xs text-center font-bold text-[#33475b]"
+                    />
+                  </div>
+                </div>
+                <textarea
+                  required
+                  rows={3}
+                  value={step2Message}
+                  onChange={(e) => setStep2Message(e.target.value)}
+                  placeholder="Follow-up message sent after connection acceptance..."
+                  className="w-full rounded border border-[#cbd6e2] p-2 text-xs text-[#33475b] focus:border-[#ff7a59] focus:outline-none"
+                />
+              </div>
+
+              {/* Step 3: Second Follow-up (Optional) */}
+              <div className="space-y-2 border border-[#dfe3eb] rounded-md p-3 bg-white">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-[#2d3e50] text-[11px]">
+                    Step 3: Second Follow-up Message (Optional)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-slate-500 font-medium">Delay (days after Step 2):</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={step3Delay}
+                      onChange={(e) => setStep3Delay(Number(e.target.value))}
+                      className="w-14 rounded border border-[#cbd6e2] px-2 py-0.5 text-xs text-center font-bold text-[#33475b]"
+                    />
+                  </div>
+                </div>
+                <textarea
+                  rows={3}
+                  value={step3Message}
+                  onChange={(e) => setStep3Message(e.target.value)}
+                  placeholder="Second follow-up message if prospect has not replied..."
+                  className="w-full rounded border border-[#cbd6e2] p-2 text-xs text-[#33475b] focus:border-[#ff7a59] focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-[#dfe3eb]">
+                <p className="text-[11px] text-slate-400">
+                  ℹ Admin will review and activate this sequence
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsCreateSeqOpen(false)}
+                    className="border-[#cbd6e2] text-[#33475b]"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={isSubmittingCustomSeq || !step2Message.trim()}
+                    className="bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer gap-1.5"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>{isSubmittingCustomSeq ? 'Submitting…' : 'Submit for Admin Approval'}</span>
+                  </Button>
+                </div>
               </div>
             </form>
           </div>

@@ -16,6 +16,8 @@ export type OutreachStatus =
   | 'unassigned'
   | 'in_sequence'
   | 'approval_pending'
+  | 'pending_sequence_approval'
+  | 'needs_sequence'
   | 'message_sent'
   | 'followup_due'
   | 'replied'
@@ -79,6 +81,9 @@ export interface Lead {
   nextFollowUpDate?: string | null; // YYYY-MM-DD
   sequenceStartDate?: string | null;
   nextActionTitle?: string | null;
+  connectionNote?: string | null;
+  sequenceMode?: 'approved' | 'custom' | null;
+  customSteps?: SequenceStep[] | null;
   notes?: string | null;
   activityHistory?: ActivityEvent[];
   enrichedData?: EnrichedData;
@@ -118,6 +123,11 @@ export interface Sequence {
   createdByUid?: string | null;
   createdByRole?: 'admin' | 'sdr' | 'ae';
   targetRole?: 'all' | 'sdr' | 'ae';
+  isCustom?: boolean;
+  targetLeadId?: string | null;
+  targetLeadName?: string | null;
+  targetLeadCompany?: string | null;
+  targetLeadLinkedin?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

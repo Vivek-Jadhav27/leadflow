@@ -60,6 +60,35 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   const [activeTab, setActiveTab] = useState<'builder' | 'workflow' | 'leads'>(initialTab);
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
 
+  const enrolledLeads = leads.filter((l) => l.sequenceId === originalSequence?.id);
+  const targetLead =
+    enrolledLeads[0] ||
+    (originalSequence?.targetLeadId ? leads.find((l) => l.id === originalSequence.targetLeadId) : null) ||
+    leads.find(
+      (l) => originalSequence && originalSequence.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)
+    ) ||
+    leads.find(
+      (l) => originalSequence && (
+        originalSequence.name.toLowerCase().includes(l.firstName.toLowerCase()) ||
+        originalSequence.name.toLowerCase().includes(l.lastName.toLowerCase())
+      )
+    );
+  const isCustomCadence = Boolean(
+    originalSequence?.isCustom ||
+    originalSequence?.id.startsWith('seq_custom_') ||
+    originalSequence?.name.toLowerCase().includes('custom cadence') ||
+    originalSequence?.description?.toLowerCase().includes('bespoke') ||
+    targetLead
+  );
+
+  const displayProspectName = targetLead
+    ? `${targetLead.firstName} ${targetLead.lastName}`
+    : (originalSequence?.targetLeadName || originalSequence?.name?.replace(/^custom cadence:\s*/i, '').trim());
+  const displayCompany = targetLead?.company || originalSequence?.targetLeadCompany || (originalSequence?.description?.match(/at\s+([^.]+)/i)?.[1]?.trim());
+  const displayLinkedin = targetLead?.linkedinUrl || originalSequence?.targetLeadLinkedin;
+  const displayJobTitle = targetLead?.jobTitle || 'Target Prospect';
+  const displayOwner = targetLead?.assignedToName || originalSequence?.createdBy || 'Assigned Rep';
+
   // Editable sequence state
   const [seqName, setSeqName] = useState(originalSequence?.name || '');
   const [seqDesc, setSeqDesc] = useState(originalSequence?.description || '');
@@ -71,10 +100,31 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     if (originalSequence) {
       setSeqName(originalSequence.name);
       setSeqDesc(originalSequence.description);
-      setSeqTargetRole(originalSequence.targetRole || 'all');
-      setSteps(originalSequence.steps);
+      setSeqTargetRole(originalSequence.targetRole || (isCustomCadence ? 'sdr' : 'all'));
+
+      const loadedSteps = [...originalSequence.steps];
+      if (loadedSteps.length > 0 && targetLead) {
+        const first = loadedSteps[0];
+        const isPlaceholder =
+          !first.messageTemplate ||
+          first.messageTemplate === 'Connection request sent on LinkedIn' ||
+          first.messageTemplate === 'Connection request sent manually on LinkedIn';
+        if (isPlaceholder) {
+          const actualNote =
+            targetLead.connectionNote ||
+            targetLead.notes?.match(/connection note:\s*(.+)/i)?.[1]?.trim() ||
+            targetLead.notes?.match(/connection sent with note:\s*"?([^"]+)"?/i)?.[1]?.trim() ||
+            (!targetLead.notes?.startsWith('Added to') && !targetLead.notes?.startsWith('Imported') && (targetLead.notes?.length || 0) > 5
+              ? targetLead.notes
+              : null);
+          if (actualNote) {
+            loadedSteps[0] = { ...first, messageTemplate: actualNote };
+          }
+        }
+      }
+      setSteps(loadedSteps);
     }
-  }, [originalSequence]);
+  }, [originalSequence, targetLead, isCustomCadence]);
 
   const isCreator =
     (user?.uid && originalSequence?.createdByUid === user.uid) ||
@@ -111,7 +161,6 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     );
   }
 
-  const enrolledLeads = leads.filter((l) => l.sequenceId === originalSequence.id);
   const isApproved = originalSequence.approvalStatus === 'approved';
 
   // Step reordering
@@ -217,8 +266,12 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Target Role Selector for Admin or Badge for Rep */}
-          {isOwnerOrAdmin ? (
+          {/* Target Role Selector or Bespoke Badge */}
+          {isCustomCadence ? (
+            <span className="rounded px-2.5 py-1 text-[10px] font-bold border uppercase tracking-wider bg-amber-50 text-amber-800 border-amber-200">
+              1:1 Bespoke Cadence · SDR Exclusive
+            </span>
+          ) : isOwnerOrAdmin ? (
             <div className="flex items-center gap-1.5 text-xs bg-slate-50 px-2 py-1 rounded border border-[#dfe3eb]">
               <span className="font-semibold text-slate-500">Target Role:</span>
               <select
@@ -284,6 +337,56 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
           </Button>
         </div>
       </div>
+
+      {/* Target Prospect & Review Card (for 1:1 bespoke lead cadences) */}
+      {(isCustomCadence && displayProspectName) && (
+        <div className="rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50/90 to-slate-50 p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-[#0077b5]/10 text-[#0077b5] border border-[#0077b5]/20 flex items-center justify-center font-bold text-sm shrink-0">
+              {displayProspectName[0]}
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-bold text-sm text-[#2d3e50]">
+                  {displayProspectName}
+                </h3>
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded-full border border-blue-200 uppercase tracking-wider">
+                  Target Prospect
+                </span>
+                <span className="text-xs text-slate-500">
+                  SDR Owner: <strong className="text-slate-700">{displayOwner}</strong>
+                </span>
+              </div>
+              <p className="text-xs text-[#516f90] mt-0.5">
+                {displayJobTitle} {displayCompany ? <span>at <strong className="text-[#33475b]">{displayCompany}</strong></span> : ''}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {displayLinkedin && (
+              <a
+                href={displayLinkedin}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-white bg-[#0077b5] hover:bg-[#006097] transition-colors cursor-pointer shadow-xs"
+              >
+                <Linkedin className="h-3.5 w-3.5" />
+                <span>Open LinkedIn Profile</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+            {targetLead && (
+              <Link
+                href={ROUTES.LEAD_DETAIL(targetLead.id)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md font-semibold text-xs text-[#33475b] bg-white border border-[#cbd6e2] hover:bg-[#f8fafc] transition-colors"
+              >
+                <span>View Lead Journey</span>
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-[#dfe3eb] text-xs">

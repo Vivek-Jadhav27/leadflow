@@ -14,6 +14,11 @@ import {
 import { prototypeStore } from '@/services/prototypeStore';
 import { useAuthContext } from '@/context/AuthProvider';
 
+// Global request deduping and synchronization throttler across all hook instances
+let lastCloudSyncTimestamp = 0;
+let inflightCloudSyncPromise: Promise<void> | null = null;
+const CLOUD_SYNC_INTERVAL_MS = 60 * 1000; // Throttle cloud fetches to at most once per 60s per workspace
+
 export function useCRM() {
   const { currentWorkspace, user, isAdmin } = useAuthContext();
   const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
@@ -47,55 +52,77 @@ export function useCRM() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadCloudData = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        let leadsUrl = '/api/leads';
-        let seqUrl = '/api/sequences';
-        let teamUrl = '/api/team';
+    const syncCloudData = async () => {
+      const now = Date.now();
+      // Skip if already synchronized within the throttle window
+      if (now - lastCloudSyncTimestamp < CLOUD_SYNC_INTERVAL_MS && lastCloudSyncTimestamp > 0) {
+        return;
+      }
 
-        if (currentWorkspaceId) {
-          headers['x-workspace-id'] = currentWorkspaceId;
-          leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
-          seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
-          teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
-        }
+      // If another component instance is currently fetching, wait for that same in-flight fetch
+      if (inflightCloudSyncPromise) {
+        await inflightCloudSyncPromise;
+        if (isMounted) refreshAll();
+        return;
+      }
 
-        // 1. Fetch leads from Firestore
-        const leadsRes = await fetch(leadsUrl, { headers });
-        if (leadsRes.ok) {
-          const data = await leadsRes.json();
-          if (data.leads && Array.isArray(data.leads) && isMounted) {
-            prototypeStore.syncIncomingLeads(data.leads, currentWorkspaceId || undefined);
-            refreshAll();
+      inflightCloudSyncPromise = (async () => {
+        try {
+          const headers: Record<string, string> = {};
+          let leadsUrl = '/api/leads';
+          let seqUrl = '/api/sequences';
+          let teamUrl = '/api/team';
+
+          if (currentWorkspaceId) {
+            headers['x-workspace-id'] = currentWorkspaceId;
+            leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+            seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+            teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
           }
-        }
 
-        // 2. Fetch sequences from Firestore
-        const seqRes = await fetch(seqUrl, { headers });
-        if (seqRes.ok) {
-          const data = await seqRes.json();
-          if (data.sequences && Array.isArray(data.sequences) && isMounted) {
-            prototypeStore.syncIncomingSequences(data.sequences, currentWorkspaceId || undefined);
-            refreshAll();
-          }
-        }
+          // Fetch leads, sequences, and team in parallel
+          const [leadsRes, seqRes, teamRes] = await Promise.allSettled([
+            fetch(leadsUrl, { headers }),
+            fetch(seqUrl, { headers }),
+            fetch(teamUrl, { headers }),
+          ]);
 
-        // 3. Fetch SDR team members from Firestore
-        const teamRes = await fetch(teamUrl, { headers });
-        if (teamRes.ok) {
-          const data = await teamRes.json();
-          if (data.team && Array.isArray(data.team) && isMounted) {
-            prototypeStore.syncIncomingTeam(data.team);
-            refreshAll();
+          if (leadsRes.status === 'fulfilled' && leadsRes.value.ok) {
+            const data = await leadsRes.value.json().catch(() => ({}));
+            if (data.leads && Array.isArray(data.leads)) {
+              prototypeStore.syncIncomingLeads(data.leads, currentWorkspaceId || undefined);
+            }
           }
+
+          if (seqRes.status === 'fulfilled' && seqRes.value.ok) {
+            const data = await seqRes.value.json().catch(() => ({}));
+            if (data.sequences && Array.isArray(data.sequences)) {
+              prototypeStore.syncIncomingSequences(data.sequences, currentWorkspaceId || undefined);
+            }
+          }
+
+          if (teamRes.status === 'fulfilled' && teamRes.value.ok) {
+            const data = await teamRes.value.json().catch(() => ({}));
+            if (data.team && Array.isArray(data.team)) {
+              prototypeStore.syncIncomingTeam(data.team);
+            }
+          }
+
+          lastCloudSyncTimestamp = Date.now();
+        } catch {
+          // Silently ignore network errors when offline
+        } finally {
+          inflightCloudSyncPromise = null;
         }
-      } catch {
-        // Silently ignore network errors when offline
+      })();
+
+      await inflightCloudSyncPromise;
+      if (isMounted) {
+        refreshAll();
       }
     };
 
-    loadCloudData();
+    syncCloudData();
 
     return () => {
       isMounted = false;
