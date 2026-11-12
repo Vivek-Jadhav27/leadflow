@@ -1,705 +1,433 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
-import {
+import type {
   Lead,
   Sequence,
   Task,
   ActivityEvent,
-  TeamMember,
   WorkspaceSettings,
   EnrichedData,
 } from '@/types/crm';
-import { prototypeStore } from '@/services/prototypeStore';
 import { useAuthContext } from '@/context/AuthProvider';
+import { api, errorMessage } from '@/lib/apiClient';
+import { crmStore, type CrmDelta, type CrmState } from '@/store/crmStore';
+import { parseTimezone, todayInZone } from '@/utils/workspaceDate';
 
-// Global request deduping and synchronization throttler across all hook instances
-let lastCloudSyncTimestamp = 0;
-let inflightCloudSyncPromise: Promise<void> | null = null;
-const CLOUD_SYNC_INTERVAL_MS = 60 * 1000; // Throttle cloud fetches to at most once per 60s per workspace
+/**
+ * Data access for the CRM UI. All state lives on the server: every action sends an intent to the
+ * API, waits for the server's verdict, then merges the server's response into a read-only cache.
+ * Failures are surfaced to the user (and nothing changes locally), so the screen can never show a
+ * success that did not happen.
+ */
+
+const EMPTY: CrmState = {
+  ownerUid: null,
+  leads: [],
+  sequences: [],
+  tasks: [],
+  activities: [],
+  team: [],
+  settings: crmStore.getServerState().settings,
+  status: 'idle',
+  error: null,
+  loadedAt: 0,
+  truncated: false,
+};
+
+interface ActionResponse extends CrmDelta {
+  errors?: { id: string; message: string }[];
+}
+
+/** Runs a server call, merges its delta, and converts failures into a toast + `undefined`. */
+async function run<T extends CrmDelta>(
+  call: () => Promise<T>,
+  onSuccess?: (res: T) => void,
+  failure = 'Action failed'
+): Promise<T | undefined> {
+  try {
+    const res = await call();
+    crmStore.applyDelta(res);
+    onSuccess?.(res);
+    return res;
+  } catch (err) {
+    toast.error(errorMessage(err, failure));
+    return undefined;
+  }
+}
+
+const post = <T,>(path: string, body: unknown) => api<T>(path, { method: 'POST', body });
+
+/** Removes fields the client must never send when updating a lead. */
+function leadPatch(updates: Partial<Lead>): Record<string, unknown> {
+  const {
+    id: _id,
+    createdAt: _c,
+    workspaceId: _w,
+    capturedBy: _cb,
+    capturedByUid: _cu,
+    activityHistory: _a,
+    ...rest
+  } = updates as Record<string, unknown>;
+  return rest;
+}
 
 export function useCRM() {
-  const { currentWorkspace, user, isAdmin } = useAuthContext();
-  const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
+  const { user, isAdmin } = useAuthContext();
+  const uid = user?.uid ?? null;
 
-  const [leads, setLeads] = useState<Lead[]>(() => prototypeStore.getLeads(currentWorkspaceId || undefined));
-  const [sequences, setSequences] = useState<Sequence[]>(() => prototypeStore.getSequences(currentWorkspaceId || undefined));
-  const [tasks, setTasks] = useState<Task[]>(() => prototypeStore.getTasks());
-  const [activities, setActivities] = useState<ActivityEvent[]>(() => prototypeStore.getActivityEvents());
-  const [team, setTeam] = useState<TeamMember[]>(() => prototypeStore.getTeamMembers());
-  const [settings, setSettings] = useState<WorkspaceSettings>(() => prototypeStore.getSettings());
+  const raw = useSyncExternalStore(crmStore.subscribe, crmStore.getState, crmStore.getServerState);
+  // Never expose another user's cached data while the signed-in user is changing.
+  const state = raw.ownerUid === uid ? raw : EMPTY;
 
-  const refreshAll = useCallback(() => {
-    setLeads(prototypeStore.getLeads(currentWorkspaceId || undefined));
-    setSequences(prototypeStore.getSequences(currentWorkspaceId || undefined));
-    setTasks(prototypeStore.getTasks());
-    setActivities(prototypeStore.getActivityEvents());
-    setTeam(prototypeStore.getTeamMembers());
-    setSettings(prototypeStore.getSettings());
-  }, [currentWorkspaceId]);
-
-  // Subscribe to prototype store changes
   useEffect(() => {
-    refreshAll();
-    const unsubscribe = prototypeStore.subscribe(() => {
-      refreshAll();
-    });
-    return unsubscribe;
-  }, [refreshAll]);
+    crmStore.setOwner(uid);
+    if (uid) void crmStore.load();
+  }, [uid]);
 
-  // Synchronize incoming leads & sequences from Firestore on initial mount or when workspace changes
+  // Refresh when the tab becomes visible again (the store skips the fetch if data is fresh).
   useEffect(() => {
-    let isMounted = true;
-
-    const syncCloudData = async () => {
-      const now = Date.now();
-      // Skip if already synchronized within the throttle window
-      if (now - lastCloudSyncTimestamp < CLOUD_SYNC_INTERVAL_MS && lastCloudSyncTimestamp > 0) {
-        return;
-      }
-
-      // If another component instance is currently fetching, wait for that same in-flight fetch
-      if (inflightCloudSyncPromise) {
-        await inflightCloudSyncPromise;
-        if (isMounted) refreshAll();
-        return;
-      }
-
-      inflightCloudSyncPromise = (async () => {
-        try {
-          const headers: Record<string, string> = {};
-          let leadsUrl = '/api/leads';
-          let seqUrl = '/api/sequences';
-          let teamUrl = '/api/team';
-
-          if (currentWorkspaceId) {
-            headers['x-workspace-id'] = currentWorkspaceId;
-            leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}&limit=100`;
-            seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
-            teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
-          }
-
-          // Fetch leads, sequences, and team in parallel
-          const [leadsRes, seqRes, teamRes] = await Promise.allSettled([
-            fetch(leadsUrl, { headers }),
-            fetch(seqUrl, { headers }),
-            fetch(teamUrl, { headers }),
-          ]);
-
-          if (leadsRes.status === 'fulfilled' && leadsRes.value.ok) {
-            const data = await leadsRes.value.json().catch(() => ({}));
-            if (data.leads && Array.isArray(data.leads)) {
-              prototypeStore.syncIncomingLeads(data.leads, currentWorkspaceId || undefined);
-            }
-          }
-
-          if (seqRes.status === 'fulfilled' && seqRes.value.ok) {
-            const data = await seqRes.value.json().catch(() => ({}));
-            if (data.sequences && Array.isArray(data.sequences)) {
-              prototypeStore.syncIncomingSequences(data.sequences, currentWorkspaceId || undefined);
-            }
-          }
-
-          if (teamRes.status === 'fulfilled' && teamRes.value.ok) {
-            const data = await teamRes.value.json().catch(() => ({}));
-            if (data.team && Array.isArray(data.team)) {
-              prototypeStore.syncIncomingTeam(data.team);
-            }
-          }
-
-          lastCloudSyncTimestamp = Date.now();
-        } catch {
-          // Silently ignore network errors when offline
-        } finally {
-          inflightCloudSyncPromise = null;
-        }
-      })();
-
-      await inflightCloudSyncPromise;
-      if (isMounted) {
-        refreshAll();
-      }
+    if (!uid) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void crmStore.load();
     };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [uid]);
 
-    syncCloudData();
+  const { leads, sequences, tasks, activities, team, settings } = state;
 
-    return () => {
-      isMounted = false;
-    };
-  }, [currentWorkspaceId, refreshAll]);
+  /** Today's date in the workspace time zone, matching what the server uses for due dates. */
+  const today = useMemo(() => todayInZone(parseTimezone(settings.timezone)), [settings.timezone, state.loadedAt]);
 
-  // Operational metrics matching decision tree
+  const refresh = useCallback(async () => {
+    await crmStore.load(true);
+    return crmStore.getState().status !== 'error';
+  }, []);
+
   const stats = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
-
     const activeLeads = leads.filter((l) => l.disposition !== 'archived');
-    const totalLeads = activeLeads.length;
-
-    const inActiveSequences = activeLeads.filter(
-      (l) => l.sequenceId && l.outreachStatus !== 'completed' && l.outreachStatus !== 'stopped'
-    ).length;
-
-    const followupsDueToday = tasks.filter(
-      (t) => t.status === 'pending' && t.dueDate <= todayStr
-    ).length;
-
-    const repliesReceived = activeLeads.filter(
-      (l) => l.outreachStatus === 'replied' || l.disposition === 'meeting_booked'
-    ).length;
-
-    const meetingsBooked = activeLeads.filter(
-      (l) => l.disposition === 'meeting_booked' || l.outcome === 'Meeting Booked'
-    ).length;
-
-    const completeDetailsCount = activeLeads.filter(
-      (l) => l.disposition === 'complete_details'
-    ).length;
-
-    const enrichedCount = activeLeads.filter(
-      (l) => l.disposition === 'enriched'
-    ).length;
-
-    const archivedCount = leads.filter((l) => l.disposition === 'archived').length;
-
     return {
-      totalLeads,
-      inActiveSequences,
-      followupsDueToday,
-      repliesReceived,
-      meetingsBooked,
-      completeDetailsCount,
-      enrichedCount,
-      archivedCount,
+      totalLeads: activeLeads.length,
+      inActiveSequences: activeLeads.filter(
+        (l) => l.sequenceId && l.outreachStatus !== 'completed' && l.outreachStatus !== 'stopped'
+      ).length,
+      followupsDueToday: tasks.filter((t) => t.status === 'pending' && t.dueDate <= today).length,
+      repliesReceived: activeLeads.filter((l) => l.outreachStatus === 'replied' || l.disposition === 'meeting_booked').length,
+      meetingsBooked: activeLeads.filter((l) => l.disposition === 'meeting_booked' || l.outcome === 'Meeting Booked').length,
+      completeDetailsCount: activeLeads.filter((l) => l.disposition === 'complete_details').length,
+      enrichedCount: activeLeads.filter((l) => l.disposition === 'enriched').length,
+      archivedCount: leads.filter((l) => l.disposition === 'archived').length,
     };
-  }, [leads, tasks]);
+  }, [leads, tasks, today]);
 
-  // Lead actions
-  const createLead = useCallback(
-    (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => {
-      try {
-        const targetWorkspaceId = input.workspaceId || currentWorkspaceId;
-        const resolvedAssignedId = input.assignedToId || (isAdmin ? null : (user?.uid || null));
-        const resolvedAssignedEmail = input.assignedToEmail || (isAdmin ? null : (user?.email || null));
-        const resolvedAssignedName = input.assignedToName || (isAdmin ? null : (user?.displayName || (user?.email ? user.email.split('@')[0] : null)));
+  // ---- leads ------------------------------------------------------------------------------------
 
-        const leadPayload = {
-          ...input,
-          workspaceId: targetWorkspaceId,
-          assignedToId: resolvedAssignedId,
-          assignedToName: resolvedAssignedName,
-          assignedToEmail: resolvedAssignedEmail,
-          capturedBy: input.capturedBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
-          capturedByUid: input.capturedByUid || user?.uid || null,
-        };
-        const lead = prototypeStore.createLead(leadPayload);
-        refreshAll();
-        // Persist to Firestore via API
-        fetch('/api/leads', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
-          },
-          body: JSON.stringify(lead),
-        }).catch((e) => console.warn('Firestore sync warning for lead', e));
-        toast.success(`Lead captured: ${lead.firstName} ${lead.lastName}`);
-        return lead;
-      } catch (err) {
-        toast.error('Failed to capture lead');
-        return undefined;
-      }
+  const createLead = useCallback(async (input: Partial<Lead>): Promise<Lead | undefined> => {
+    const res = await run(
+      () => post<ActionResponse & { lead: Lead }>('/api/leads', leadPatch(input)),
+      (r) => toast.success(`Lead captured: ${r.lead.firstName} ${r.lead.lastName}`),
+      'Failed to capture lead'
+    );
+    return res?.lead as Lead | undefined;
+  }, []);
+
+  const updateLead = useCallback(async (id: string, updates: Partial<Lead>): Promise<Lead | undefined> => {
+    const res = await run(
+      () => api<ActionResponse & { lead: Lead }>('/api/leads', { method: 'PATCH', body: { id, ...leadPatch(updates) } }),
+      () => toast.success('Lead updated successfully'),
+      'Failed to update lead'
+    );
+    return res ? crmStore.getState().leads.find((l) => l.id === id) : undefined;
+  }, []);
+
+  const deleteLeads = useCallback(async (ids: string[]): Promise<boolean> => {
+    try {
+      await api('/api/leads', { method: 'DELETE', body: { ids } });
+      crmStore.applyDelta({ deletedLeadIds: ids });
+      return true;
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to delete'));
+      return false;
+    }
+  }, []);
+
+  const deleteLead = useCallback(async (id: string) => {
+    const ok = await deleteLeads([id]);
+    if (ok) toast.success('Lead permanently deleted');
+    return ok;
+  }, [deleteLeads]);
+
+  const bulkDelete = useCallback(async (ids: string[]) => {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const ok = await deleteLeads(ids);
+    if (ok) toast.success(`${ids.length} leads permanently deleted`);
+  }, [deleteLeads]);
+
+  const leadAction = useCallback(
+    async (id: string, body: Record<string, unknown>, success: (lead?: Lead) => string | null, failure: string) => {
+      const res = await run(
+        () => post<ActionResponse>(`/api/leads/${encodeURIComponent(id)}/actions`, body),
+        (r) => {
+          const msg = success(r.lead as Lead | undefined);
+          if (msg) toast.success(msg);
+        },
+        failure
+      );
+      return res?.lead as Lead | undefined;
     },
-    [currentWorkspaceId, user, isAdmin, refreshAll]
+    []
   );
 
-  const updateLead = useCallback(
-    (id: string, updates: Partial<Lead>) => {
-      const updated = prototypeStore.updateLead(id, updates);
-      if (updated) {
-        refreshAll();
-        // Persist to Firestore via API
-        fetch('/api/leads', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, ...updates }),
-        }).catch((e) => console.warn('Firestore sync warning for lead update', e));
-        toast.success('Lead updated successfully');
-      }
-      return updated;
-    },
-    [refreshAll]
+  const archiveLead = useCallback(
+    (id: string, isArchived: boolean = true) =>
+      leadAction(id, { action: 'archive', archived: isArchived }, () => (isArchived ? 'Lead moved to archive' : 'Lead restored to active'), 'Failed to archive lead'),
+    [leadAction]
   );
 
-  const deleteLead = useCallback(
+  const enrichLead = useCallback(
+    (id: string, data: EnrichedData) =>
+      leadAction(id, { action: 'enrich', data }, () => 'Lead profile enriched with verified intelligence', 'Failed to enrich lead'),
+    [leadAction]
+  );
+
+  const markReply = useCallback(
+    (id: string, replyMessage?: string, outcome: string = 'Interested') =>
+      leadAction(id, { action: 'reply', message: replyMessage, outcome }, () => 'Reply recorded. Automated sequence halted.', 'Failed to record reply'),
+    [leadAction]
+  );
+
+  /** Advances the lead one step. Passing the step the user saw makes double clicks / stale tabs safe. */
+  const advanceLeadStep = useCallback(
     (id: string) => {
-      const success = prototypeStore.deleteLead(id);
-      if (success) {
-        refreshAll();
-        // Persist to Firestore & backend via API
-        fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch((e) =>
-          console.warn('Firestore sync warning for lead delete', e)
-        );
-        toast.success('Lead permanently deleted');
-      }
-      return success;
+      const current = crmStore.getState().leads.find((l) => l.id === id)?.currentStepNumber;
+      return leadAction(
+        id,
+        { action: 'advance', ...(Number.isInteger(current) ? { expectedStep: current } : {}) },
+        (l) => (l ? `Advanced ${l.firstName} to step ${l.currentStepNumber}` : null),
+        'Failed to advance lead'
+      );
     },
-    [refreshAll]
+    [leadAction]
   );
-
-  const archiveLead = useCallback((id: string, isArchived: boolean = true) => {
-    const updated = prototypeStore.archiveLead(id, isArchived);
-    if (updated) {
-      refreshAll();
-      fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: updated.id,
-          disposition: updated.disposition,
-          outcome: updated.outcome,
-        }),
-      }).catch((e) => console.warn('Firestore sync warning for archive lead', e));
-      toast.success(isArchived ? 'Lead moved to archive' : 'Lead restored to active');
-    }
-    return updated;
-  }, [refreshAll]);
-
-  const enrichLead = useCallback((id: string, data: EnrichedData) => {
-    const updated = prototypeStore.enrichLead(id, data);
-    if (updated) {
-      refreshAll();
-      fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: updated.id,
-          enrichedData: updated.enrichedData,
-          disposition: updated.disposition,
-          phone: updated.phone,
-        }),
-      }).catch((e) => console.warn('Firestore sync warning for enrich lead', e));
-      toast.success('Lead profile enriched with verified intelligence');
-    }
-    return updated;
-  }, [refreshAll]);
-
-  const markReply = useCallback((id: string, replyMessage?: string, outcome: string = 'Interested') => {
-    const updated = prototypeStore.markReply(id, replyMessage, outcome);
-    if (updated) {
-      refreshAll();
-      fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: updated.id,
-          outreachStatus: updated.outreachStatus,
-          disposition: updated.disposition,
-          outcome: updated.outcome,
-          nextFollowUpDate: null,
-          nextActionTitle: updated.nextActionTitle,
-        }),
-      }).catch((e) => console.warn('Firestore sync warning for mark reply', e));
-      toast.success('Reply recorded. Automated sequence halted.');
-    }
-    return updated;
-  }, [refreshAll]);
-
-  const advanceLeadStep = useCallback((id: string) => {
-    const updated = prototypeStore.advanceLeadStep(id);
-    if (updated) {
-      refreshAll();
-      fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: updated.id,
-          currentStepNumber: updated.currentStepNumber,
-          connectionStatus: updated.connectionStatus,
-          outreachStatus: updated.outreachStatus,
-          disposition: updated.disposition,
-          nextFollowUpDate: updated.nextFollowUpDate || null,
-          nextActionTitle: updated.nextActionTitle || null,
-          activityHistory: updated.activityHistory || [],
-        }),
-      }).catch((e) => console.warn('Firestore sync warning for advance lead step', e));
-      toast.success(`Advanced ${updated.firstName} to step ${updated.currentStepNumber}`);
-    }
-    return updated;
-  }, [refreshAll]);
 
   const assignSequenceToLead = useCallback(
-    (leadId: string, sequenceId: string | null) => {
-      const updated = prototypeStore.assignSequenceToLead(leadId, sequenceId);
-      if (updated) {
-        refreshAll();
-        // Persist sequence assignment directly to Firebase Firestore
-        fetch('/api/leads', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: leadId,
-            sequenceId: updated.sequenceId,
-            sequenceName: updated.sequenceName,
-            currentStepNumber: updated.currentStepNumber,
-            totalSteps: updated.totalSteps,
-            outreachStatus: updated.outreachStatus,
-            nextFollowUpDate: updated.nextFollowUpDate,
-            nextActionTitle: updated.nextActionTitle,
-            activityHistory: updated.activityHistory || [],
-          }),
-        }).catch((e) => console.warn('Firestore sequence assign error', e));
+    (leadId: string, sequenceId: string | null) =>
+      leadAction(
+        leadId,
+        { action: 'enroll', sequenceId },
+        (l) => (l ? (sequenceId ? `Enrolled ${l.firstName} in ${l.sequenceName}!` : `Unenrolled ${l.firstName} from sequence.`) : null),
+        'Failed to update sequence'
+      ),
+    [leadAction]
+  );
 
-        if (sequenceId) {
-          toast.success(`Enrolled ${updated.firstName} in ${updated.sequenceName}!`);
-        } else {
-          toast.info(`Unenrolled ${updated.firstName} from sequence.`);
-        }
-      }
-      return updated;
+  const submitCustomSequence = useCallback(
+    (leadId: string, input: { name?: string; steps: unknown[]; connectionNote?: string | null }) =>
+      leadAction(leadId, { action: 'custom_sequence', ...input }, () => 'Custom cadence submitted for Admin approval', 'Failed to submit cadence'),
+    [leadAction]
+  );
+
+  const addActivityEvent = useCallback(
+    async (event: Pick<ActivityEvent, 'leadId' | 'type' | 'title' | 'description'> & Partial<ActivityEvent>): Promise<ActivityEvent | undefined> => {
+      const res = await run(
+        () =>
+          post<ActionResponse>(`/api/leads/${encodeURIComponent(event.leadId)}/actions`, {
+            action: 'activity',
+            type: event.type,
+            title: event.title,
+            description: event.description,
+          }),
+        undefined,
+        'Failed to record activity'
+      );
+      return res?.activities?.[0];
     },
-    [refreshAll]
+    []
+  );
+
+  const loadActivities = useCallback(async (leadId: string) => {
+    try {
+      const res = await api<{ activities: ActivityEvent[] }>(`/api/activities?leadId=${encodeURIComponent(leadId)}`);
+      crmStore.applyDelta({ activities: res.activities });
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to load activity'));
+    }
+  }, []);
+
+  const bulkAction = useCallback(
+    async (body: Record<string, unknown>, success: (n: number) => string, failure: string) => {
+      const res = await run(
+        () => post<ActionResponse>('/api/leads/bulk-actions', body),
+        (r) => {
+          const done = r.leads?.length ?? 0;
+          if (done > 0) toast.success(success(done));
+          if (r.errors?.length) toast.error(`${r.errors.length} lead(s) failed: ${r.errors[0].message}`);
+        },
+        failure
+      );
+      return res;
+    },
+    []
   );
 
   const bulkAssignSequence = useCallback(
-    (leadIds: string[], sequenceId: string | null) => {
-      prototypeStore.bulkAssignSequence(leadIds, sequenceId);
-      refreshAll();
-
-      const updatedLeads = prototypeStore
-        .getLeads()
-        .filter((l) => leadIds.includes(l.id))
-        .map((l) => ({
-          id: l.id,
-          sequenceId: l.sequenceId,
-          sequenceName: l.sequenceName,
-          currentStepNumber: l.currentStepNumber,
-          totalSteps: l.totalSteps,
-          outreachStatus: l.outreachStatus,
-          nextFollowUpDate: l.nextFollowUpDate,
-          nextActionTitle: l.nextActionTitle,
-        }));
-
-      if (updatedLeads.length > 0) {
-        fetch('/api/leads', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leads: updatedLeads }),
-        }).catch((e) => console.warn('Firestore bulk sequence assign error', e));
-      }
-
-      toast.success(`${leadIds.length} lead(s) sequence saved to Cloud!`);
-    },
-    [refreshAll]
+    (ids: string[], sequenceId: string | null) =>
+      bulkAction({ action: 'enroll', ids, sequenceId }, (n) => `${n} lead(s) updated`, 'Failed to assign sequence'),
+    [bulkAction]
   );
 
-  const bulkAssign = useCallback((ids: string[], memberId: string) => {
-    prototypeStore.bulkAssign(ids, memberId);
-    refreshAll();
-
-    const updatedLeads = prototypeStore
-      .getLeads()
-      .filter((l) => ids.includes(l.id))
-      .map((l) => ({
-        id: l.id,
-        assignedToId: l.assignedToId,
-        assignedToName: l.assignedToName,
-        assignedToEmail: l.assignedToEmail,
-      }));
-
-    if (updatedLeads.length > 0) {
-      fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leads: updatedLeads }),
-      }).catch((e) => console.warn('Firestore bulk assign error', e));
-    }
-
-    toast.success(`${ids.length} leads reassigned in Cloud`);
-  }, [refreshAll]);
-
-  const bulkArchive = useCallback((ids: string[]) => {
-    prototypeStore.bulkArchive(ids);
-    refreshAll();
-    toast.success(`${ids.length} leads archived`);
-  }, [refreshAll]);
-
-  const bulkDelete = useCallback(
-    (ids: string[]) => {
-      if (!Array.isArray(ids) || ids.length === 0) return;
-      prototypeStore.bulkDelete(ids);
-      refreshAll();
-      // Persist bulk deletion to Firestore & backend via API
-      fetch('/api/leads', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      }).catch((e) => console.warn('Firestore sync warning for bulk lead delete', e));
-      toast.success(`${ids.length} leads permanently deleted`);
-    },
-    [refreshAll]
+  const bulkAssign = useCallback(
+    (ids: string[], memberId: string) =>
+      bulkAction({ action: 'assign', ids, memberId }, (n) => `${n} leads reassigned`, 'Failed to reassign leads'),
+    [bulkAction]
   );
 
-  // Sequence actions
-  const saveSequence = useCallback(
-    (seq: Sequence) => {
-      const targetWorkspaceId = seq.workspaceId || currentWorkspaceId;
-      const sequencePayload: Sequence = {
-        ...seq,
-        workspaceId: targetWorkspaceId,
-        createdBy: seq.createdBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
-        createdByUid: seq.createdByUid || user?.uid || null,
-      };
-      const saved = prototypeStore.saveSequence(sequencePayload);
-      refreshAll();
-      // Persist to Firestore via API
-      fetch('/api/sequences', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
-        },
-        body: JSON.stringify(saved),
-      }).catch((e) => console.warn('Firestore sync warning for sequence', e));
-      toast.success(`Sequence "${saved.name}" saved`);
-      return saved;
-    },
-    [currentWorkspaceId, user, isAdmin, refreshAll]
+  const bulkArchive = useCallback(
+    (ids: string[]) => bulkAction({ action: 'archive', ids }, (n) => `${n} leads archived`, 'Failed to archive leads'),
+    [bulkAction]
   );
-
-  const approveSequence = useCallback(
-    (id: string, approverName?: string) => {
-      const resolvedApprover = approverName || user?.displayName || user?.email || 'Admin';
-      const approved = prototypeStore.approveSequence(id, resolvedApprover);
-      if (approved) {
-        refreshAll();
-        // Persist to Firestore via API
-        fetch('/api/sequences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(approved),
-        }).catch((e) => console.warn('Firestore sync warning for sequence approval', e));
-
-        // Also persist any leads that were activated by this sequence approval
-        const activatedLeads = prototypeStore.getLeads().filter(
-          (l) => l.sequenceId === approved.id || (approved.targetLeadId && l.id === approved.targetLeadId)
-        );
-        activatedLeads.forEach((l) => {
-          fetch('/api/leads', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(l),
-          }).catch((e) => console.warn('Firestore sync warning for approved lead', e));
-        });
-
-        toast.success(`Sequence "${approved.name}" approved and activated!`);
-      }
-      return approved;
-    },
-    [refreshAll, user]
-  );
-
-  const duplicateSequence = useCallback(
-    (id: string) => {
-      const copy = prototypeStore.duplicateSequence(id);
-      if (copy) {
-        refreshAll();
-        fetch('/api/sequences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(copy),
-        }).catch((e) => console.warn('Firestore sync warning for sequence copy', e));
-        toast.success(`Created duplicate "${copy.name}"`);
-      }
-      return copy;
-    },
-    [refreshAll]
-  );
-
-  const deleteSequence = useCallback(
-    (id: string) => {
-      const ok = prototypeStore.deleteSequence(id);
-      if (ok) {
-        refreshAll();
-        fetch(`/api/sequences?id=${id}`, { method: 'DELETE' }).catch((e) =>
-          console.warn('Firestore sync warning for sequence delete', e)
-        );
-        toast.success('Sequence deleted');
-      }
-      return ok;
-    },
-    [refreshAll]
-  );
-
-  const toggleSequenceStatus = useCallback(
-    (id: string) => {
-      const updated = prototypeStore.toggleSequenceStatus(id);
-      if (updated) {
-        refreshAll();
-        fetch('/api/sequences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updated),
-        }).catch((e) => console.warn('Firestore sync warning for sequence status', e));
-        toast.success(`Sequence ${updated.status === 'active' ? 'activated' : 'paused'}`);
-      }
-      return updated;
-    },
-    [refreshAll]
-  );
-
-  // Task actions
-  const createTask = useCallback((task: Omit<Task, 'id'>) => {
-    const created = prototypeStore.createTask(task);
-    toast.success('Task created');
-    return created;
-  }, []);
-
-  const updateTaskStatus = useCallback((id: string, status: Task['status']) => {
-    const updated = prototypeStore.updateTaskStatus(id, status);
-    if (updated) {
-      if (status === 'completed') {
-        toast.success('Task marked as completed');
-      } else if (status === 'skipped') {
-        toast.info('Task skipped and recorded in activity log');
-      } else {
-        toast.info(`Task status: ${status}`);
-      }
-    }
-    return updated;
-  }, []);
-
-  const rescheduleTask = useCallback((id: string, newDueDate: string) => {
-    const updated = prototypeStore.rescheduleTask(id, newDueDate);
-    if (updated) {
-      toast.success(`Task rescheduled to ${newDueDate}`);
-    }
-    return updated;
-  }, []);
-
-  const deleteTask = useCallback((id: string) => {
-    const ok = prototypeStore.deleteTask(id);
-    if (ok) toast.success('Task deleted');
-    return ok;
-  }, []);
-
-  // Team actions
-  const addTeamMember = useCallback((member: Omit<TeamMember, 'id'>) => {
-    const created = prototypeStore.addTeamMember(member);
-    toast.success(`Invited ${created.name} to team`);
-    return created;
-  }, []);
-
-  // Settings
-  const updateSettings = useCallback((newSettings: Partial<WorkspaceSettings>) => {
-    const updated = prototypeStore.updateSettings(newSettings);
-    toast.success('Workspace settings saved');
-    return updated;
-  }, []);
-
-  const syncToFirestore = useCallback(async () => {
-    try {
-      const curLeads = prototypeStore.getLeads(currentWorkspaceId || undefined);
-      const curSeqs = prototypeStore.getSequences(currentWorkspaceId || undefined);
-      const res = await fetch('/api/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(currentWorkspaceId ? { 'x-workspace-id': currentWorkspaceId } : {}),
-        },
-        body: JSON.stringify({
-          leads: curLeads,
-          sequences: curSeqs,
-          workspaceId: currentWorkspaceId,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        toast.success(`Synced ${data.syncedLeads ?? curLeads.length} leads & ${data.syncedSequences ?? curSeqs.length} sequences to Firestore!`);
-        return true;
-      } else {
-        toast.error('Failed to sync to Firestore');
-        return false;
-      }
-    } catch (e: any) {
-      toast.error('Sync failed: ' + (e?.message || 'Network error'));
-      return false;
-    }
-  }, [currentWorkspaceId]);
-
-  const resetToDefaults = useCallback(() => {
-    prototypeStore.resetToDefaults();
-    toast.success('Reset all CRM data to initial sample seed');
-  }, []);
 
   const bulkCreateLeads = useCallback(
     async (
       leadsToCreate: Array<Partial<Lead>>,
-      defaults?: { defaultSequenceId?: string; defaultAssignedToId?: string; defaultAssignedToName?: string; workspaceId?: string }
-    ) => {
+      defaults?: { defaultSequenceId?: string; defaultAssignedToId?: string; defaultAssignedToName?: string }
+    ): Promise<Lead[]> => {
       try {
-        const targetWorkspaceId = defaults?.workspaceId || currentWorkspaceId;
-        const leadsWithWorkspace = leadsToCreate.map((l) => ({
-          ...l,
-          workspaceId: l.workspaceId || targetWorkspaceId,
-          capturedBy: l.capturedBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
-          capturedByUid: l.capturedByUid || user?.uid || null,
-        }));
-
-        const res = await fetch('/api/leads/bulk', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(targetWorkspaceId ? { 'x-workspace-id': targetWorkspaceId } : {}),
-          },
-          body: JSON.stringify({
-            leads: leadsWithWorkspace,
-            workspaceId: targetWorkspaceId,
-            ...defaults,
-          }),
+        const res = await post<ActionResponse & { count: number; skipped?: number; leads: Lead[] }>('/api/leads/bulk', {
+          leads: leadsToCreate,
+          ...defaults,
         });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Failed to import leads');
-        }
-
-        if (Array.isArray(data.leads)) {
-          prototypeStore.bulkAddLeads(data.leads);
-          refreshAll();
-        }
-
-        toast.success(`Successfully imported ${data.count || leadsToCreate.length} leads to Cloud Database!`);
-        return data.leads || [];
-      } catch (err: any) {
-        toast.error(`Import failed: ${err.message || 'Server error'}`);
+        crmStore.applyDelta(res);
+        toast.success(
+          `Imported ${res.count} lead(s)${res.skipped ? `; skipped ${res.skipped} (duplicates or invalid rows)` : ''}.`
+        );
+        return res.leads || [];
+      } catch (err) {
+        toast.error(`Import failed: ${errorMessage(err)}`);
         throw err;
       }
     },
-    [currentWorkspaceId, user, isAdmin, refreshAll]
+    []
   );
 
-  const addActivityEvent = useCallback(
-    (event: Omit<ActivityEvent, 'id'>) => {
-      const created = prototypeStore.addActivityEvent(event);
-      refreshAll();
-      if (event.leadId) {
-        const lead = prototypeStore.getLeadById(event.leadId);
-        if (lead) {
-          fetch('/api/leads', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: event.leadId,
-              activityHistory: lead.activityHistory || [created],
-            }),
-          }).catch((e) => console.warn('Activity history persist warning', e));
-        }
-      }
-      return created;
+  // ---- sequences --------------------------------------------------------------------------------
+
+  const saveSequence = useCallback(async (seq: Sequence): Promise<Sequence | undefined> => {
+    const res = await run(
+      () => post<ActionResponse & { sequence: Sequence }>('/api/sequences', seq),
+      (r) => toast.success(`Sequence "${r.sequence.name}" saved`),
+      'Failed to save sequence'
+    );
+    return res?.sequence;
+  }, []);
+
+  const sequenceAction = useCallback(
+    async (id: string, action: string, success: (s: Sequence) => string, failure: string) => {
+      const res = await run(
+        () => post<ActionResponse & { sequence: Sequence }>(`/api/sequences/${encodeURIComponent(id)}/actions`, { action }),
+        (r) => toast.success(success(r.sequence)),
+        failure
+      );
+      return res?.sequence;
     },
-    [refreshAll]
+    []
   );
+
+  const approveSequence = useCallback(
+    (id: string) => sequenceAction(id, 'approve', (s) => `Sequence "${s.name}" approved and activated!`, 'Failed to approve sequence'),
+    [sequenceAction]
+  );
+
+  const duplicateSequence = useCallback(
+    (id: string) => sequenceAction(id, 'duplicate', (s) => `Created duplicate "${s.name}" (needs approval before use)`, 'Failed to duplicate sequence'),
+    [sequenceAction]
+  );
+
+  const toggleSequenceStatus = useCallback(
+    (id: string) => sequenceAction(id, 'toggle', (s) => `Sequence ${s.status === 'active' ? 'activated' : 'paused'}`, 'Failed to change sequence status'),
+    [sequenceAction]
+  );
+
+  const deleteSequence = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await api(`/api/sequences?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      crmStore.applyDelta({ deletedSequenceIds: [id] });
+      toast.success('Sequence deleted');
+      return true;
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to delete sequence'));
+      return false;
+    }
+  }, []);
+
+  // ---- tasks ------------------------------------------------------------------------------------
+
+  const createTask = useCallback(async (task: Partial<Task> & { title: string; leadId: string }): Promise<Task | undefined> => {
+    const res = await run(
+      () =>
+        post<ActionResponse>('/api/tasks', {
+          title: task.title,
+          leadId: task.leadId,
+          type: task.type,
+          dueDate: task.dueDate,
+          priority: task.priority,
+          notes: task.notes,
+          assignedToId: task.assignedToId,
+        }),
+      () => toast.success('Task created'),
+      'Failed to create task'
+    );
+    return res?.tasks?.[0];
+  }, []);
+
+  /** Completing the live step task also advances the lead's sequence on the server. */
+  const updateTaskStatus = useCallback(async (id: string, status: Task['status']): Promise<Task | undefined> => {
+    const res = await run(
+      () => api<ActionResponse>('/api/tasks', { method: 'PATCH', body: { id, status } }),
+      (r) => {
+        if (status === 'completed') {
+          toast.success(r.lead ? `Done. ${r.lead.firstName} moved to step ${r.lead.currentStepNumber}` : 'Task marked as completed');
+        } else if (status === 'skipped') toast.info('Task skipped and recorded in activity log');
+        else toast.info(`Task status: ${status}`);
+      },
+      'Failed to update task'
+    );
+    return res?.tasks?.find((t) => t.id === id);
+  }, []);
+
+  const rescheduleTask = useCallback(async (id: string, newDueDate: string): Promise<Task | undefined> => {
+    const res = await run(
+      () => api<ActionResponse>('/api/tasks', { method: 'PATCH', body: { id, dueDate: newDueDate } }),
+      () => toast.success(`Task rescheduled to ${newDueDate}`),
+      'Failed to reschedule task'
+    );
+    return res?.tasks?.find((t) => t.id === id);
+  }, []);
+
+  const deleteTask = useCallback(async (id: string): Promise<boolean> => {
+    const res = await run(
+      () => api<ActionResponse>(`/api/tasks?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+      () => toast.success('Task deleted'),
+      'Failed to delete task'
+    );
+    return Boolean(res);
+  }, []);
+
+  // ---- settings ---------------------------------------------------------------------------------
+
+  const updateSettings = useCallback(async (changes: Partial<WorkspaceSettings>): Promise<WorkspaceSettings | undefined> => {
+    try {
+      const res = await api<{ settings: WorkspaceSettings }>('/api/settings', { method: 'PUT', body: changes });
+      crmStore.setSettings(res.settings);
+      toast.success('Workspace settings saved');
+      return res.settings;
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to save settings'));
+      return undefined;
+    }
+  }, []);
 
   return {
     leads,
@@ -709,10 +437,16 @@ export function useCRM() {
     team,
     settings,
     stats,
-    syncToFirestore,
+    today,
+    loading: state.status === 'loading' || (Boolean(uid) && state.status === 'idle'),
+    error: state.error,
+    truncated: state.truncated,
+    isAdmin,
+    refresh,
+    loadActivities,
     bulkCreateLeads,
     addActivityEvent,
-    // Actions
+    // Leads
     createLead,
     updateLead,
     deleteLead,
@@ -723,6 +457,7 @@ export function useCRM() {
     bulkAssign,
     bulkAssignSequence,
     assignSequenceToLead,
+    submitCustomSequence,
     bulkArchive,
     bulkDelete,
     // Sequences
@@ -736,10 +471,7 @@ export function useCRM() {
     updateTaskStatus,
     rescheduleTask,
     deleteTask,
-    // Team
-    addTeamMember,
     // Settings
     updateSettings,
-    resetToDefaults,
   };
 }

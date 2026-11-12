@@ -15,7 +15,7 @@ interface AddLeadDrawerProps {
 }
 
 export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProps) {
-  const { leads, sequences, team, createLead, updateLead } = useCRM();
+  const { leads, sequences, team, createLead, updateLead, bulkAssign, assignSequenceToLead } = useCRM();
   const { user, isAdmin, currentWorkspace } = useAuthContext();
 
   const currentWorkspaceId = currentWorkspace?.workspaceId || user?.workspaceId || null;
@@ -117,56 +117,43 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
-    const selectedSeq = sequenceId ? sequences.find((s) => s.id === sequenceId) : null;
-    const finalAssigneeId = isIndividualRep ? currentRepId : (assignedToId || null);
-    const selectedMember = team.find((m) => m.id === finalAssigneeId);
-    const finalAssigneeName = isIndividualRep ? currentRepName : (selectedMember?.name || null);
-    const finalAssigneeEmail = isIndividualRep ? currentRepEmail : (selectedMember?.email || null);
+    // The server assigns ownership (reps always own what they create), validates the URL, and
+    // schedules the first sequence task. Here we only send what the user typed.
+    const ownerId = isIndividualRep ? currentRepId : (assignedToId || null);
 
     if (leadToEdit) {
-      updateLead(leadToEdit.id, {
+      const updated = await updateLead(leadToEdit.id, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         company: company.trim(),
         jobTitle: jobTitle.trim(),
         linkedinUrl: linkedinUrl.trim(),
-        sequenceId: sequenceId || null,
-        sequenceName: selectedSeq?.name || null,
-        assignedToId: finalAssigneeId,
-        assignedToName: finalAssigneeName,
-        assignedToEmail: finalAssigneeEmail,
-        workspaceId: leadToEdit.workspaceId || currentWorkspaceId,
-        outreachStatus: sequenceId
-          ? (leadToEdit.outreachStatus === 'unassigned' ? 'in_sequence' : leadToEdit.outreachStatus)
-          : (leadToEdit.outreachStatus === 'in_sequence' ? 'unassigned' : leadToEdit.outreachStatus),
       });
+      if (!updated) return;
+
+      // Reassigning and re-enrolling are workflow actions (they move open tasks and write the activity log).
+      if (isAdmin && ownerId && ownerId !== leadToEdit.assignedToId) {
+        await bulkAssign([leadToEdit.id], ownerId);
+      }
+      if ((sequenceId || null) !== (leadToEdit.sequenceId || null)) {
+        const enrolled = await assignSequenceToLead(leadToEdit.id, sequenceId || null);
+        if (!enrolled) return;
+      }
     } else {
-      createLead({
+      const created = await createLead({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         company: company.trim(),
         jobTitle: jobTitle.trim(),
         linkedinUrl: linkedinUrl.trim(),
-        email: null,
-        channel: 'linkedin',
         sequenceId: sequenceId || null,
-        sequenceName: selectedSeq?.name || null,
-        currentStepNumber: sequenceId ? 1 : 0,
-        totalSteps: selectedSeq ? selectedSeq.steps.length : 4,
-        connectionStatus: 'not_started',
-        outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
-        disposition: 'active',
-        assignedToId: finalAssigneeId,
-        assignedToName: finalAssigneeName,
-        assignedToEmail: finalAssigneeEmail,
-        capturedBy: user?.email || null,
-        capturedByUid: user?.uid || null,
-        workspaceId: currentWorkspaceId,
+        ...(isAdmin && ownerId ? { assignedToId: ownerId } : {}),
       });
+      if (!created) return;
     }
 
     onClose();

@@ -358,8 +358,8 @@ export default function LeadsPage() {
     if (!deletingLeadId) return;
     setIsDeleting(true);
     try {
-      deleteLead(deletingLeadId);
-      setSelectedIds((prev) => prev.filter((id) => id !== deletingLeadId));
+      const ok = await deleteLead(deletingLeadId);
+      if (ok) setSelectedIds((prev) => prev.filter((id) => id !== deletingLeadId));
     } finally {
       setIsDeleting(false);
       setDeletingLeadId(null);
@@ -998,22 +998,10 @@ export default function LeadsPage() {
                                   onChange={(e) => {
                                     const newMemberId = e.target.value;
                                     if (!newMemberId) {
-                                      updateLead(lead.id, {
-                                        assignedToId: null,
-                                        assignedToName: null,
-                                        assignedToEmail: null,
-                                      });
-                                      toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
+                                      toast.info('Every lead needs an owner. Choose a team member to reassign it.');
                                     } else {
-                                      const targetMember = availableTeamMembers.find((m) => m.id === newMemberId);
-                                      if (targetMember) {
-                                        updateLead(lead.id, {
-                                          assignedToId: targetMember.id,
-                                          assignedToName: targetMember.name,
-                                          assignedToEmail: targetMember.email,
-                                        });
-                                        toast.success(`Shifted ${lead.firstName} to ${targetMember.name}`);
-                                      }
+                                      // Server action: moves the lead's open tasks and records the reassignment.
+                                      void bulkAssign([lead.id], newMemberId);
                                     }
                                   }}
                                   className={`text-[11px] font-semibold rounded-md border px-2 py-1 pr-6 cursor-pointer transition-all focus:outline-none appearance-none bg-no-repeat bg-[right_6px_center] ${

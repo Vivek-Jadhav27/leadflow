@@ -297,7 +297,6 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         defaultSequenceId: selectedSequenceId || undefined,
         defaultAssignedToId: finalAssigneeId || undefined,
         defaultAssignedToName: finalAssigneeName || undefined,
-        workspaceId: currentWorkspaceId || undefined,
       });
 
       // Reset and close

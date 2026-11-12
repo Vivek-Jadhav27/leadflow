@@ -20,9 +20,11 @@ import { useAuthContext } from '@/context/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { WorkspaceSettings } from '@/types/crm';
 import { toast } from 'sonner';
+import { api, errorMessage } from '@/lib/apiClient';
+import { DEFAULT_SETTINGS } from '@/constants/defaultSettings';
 
 export default function SettingsPage() {
-  const { settings, updateSettings, resetToDefaults, syncToFirestore, leads, sequences } = useCRM();
+  const { settings, updateSettings, refresh, leads, sequences } = useCRM();
   const { user, role } = useAuthContext();
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -42,9 +44,9 @@ export default function SettingsPage() {
   const [liConnectLimit, setLiConnectLimit] = useState(settings.dailyLinkedInConnectLimit);
   const [liMsgLimit, setLiMsgLimit] = useState(settings.dailyLinkedInMessageLimit);
 
-  const handleSaveAll = (e: React.FormEvent) => {
+  const handleSaveAll = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateSettings({
+    await updateSettings({
       name,
       domain,
       timezone,
@@ -58,11 +60,16 @@ export default function SettingsPage() {
       dailyLinkedInConnectLimit: liConnectLimit,
       dailyLinkedInMessageLimit: liMsgLimit,
     });
-    toast.success('Workspace settings saved');
   };
 
-  const handleExportJSON = () => {
-    const data = localStorage.getItem('leadflow_prototype_db_v3') || '{}';
+  const handleExportJSON = async () => {
+    let data: string;
+    try {
+      data = JSON.stringify(await api('/api/sync'), null, 2);
+    } catch (err) {
+      toast.error(errorMessage(err, 'Export failed (admin access required)'));
+      return;
+    }
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -356,7 +363,7 @@ export default function SettingsPage() {
                   onClick={async () => {
                     setIsSyncing(true);
                     try {
-                      await syncToFirestore();
+                      await refresh();
                     } finally {
                       setIsSyncing(false);
                     }
@@ -364,7 +371,7 @@ export default function SettingsPage() {
                   className="h-8 gap-1.5 bg-white text-[#ff7a59] border-[#ff7a59]/30 hover:bg-[#fff6f4] font-medium"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Syncing to Firestore...' : 'Push All to Firestore Now'}</span>
+                  <span>{isSyncing ? 'Refreshing...' : 'Refresh from Server'}</span>
                 </Button>
               </div>
             </div>
@@ -373,14 +380,14 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-bold text-[#33475b]">
-                    Local Storage Database
+                    Backup &amp; Defaults
                   </h4>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    LeadFlow prototype persists all leads, tasks, and state machine changes locally in your browser.
+                    All leads, tasks and sequences are stored in the cloud database. You can download a JSON backup of your workspace or restore the default preferences.
                   </p>
                 </div>
                 <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 border border-slate-200">
-                  Browser Cache
+                  Cloud Database
                 </span>
               </div>
 
@@ -401,14 +408,14 @@ export default function SettingsPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    if (confirm('Restore initial realistic seed data? Any new leads created will be reset.')) {
-                      resetToDefaults();
+                    if (confirm('Restore the default workspace preferences? Your leads, tasks and sequences are not affected.')) {
+                      void updateSettings({ ...DEFAULT_SETTINGS, name: settings.name });
                     }
                   }}
                   className="h-8 gap-1.5 border-rose-200 text-rose-700 hover:bg-rose-50"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
-                  <span>Reset to Seed Data</span>
+                  <span>Reset Preferences to Defaults</span>
                 </Button>
               </div>
             </div>

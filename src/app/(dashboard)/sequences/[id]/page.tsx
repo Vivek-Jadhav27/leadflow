@@ -235,7 +235,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
       steps,
     };
 
-    saveSequence(updated);
+    void saveSequence(updated);
   };
 
   return (
@@ -300,7 +300,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
           {!isApproved && isOwnerOrAdmin && (
             <Button
               size="sm"
-              onClick={() => approveSequence(originalSequence.id, user?.displayName || user?.email || 'Admin')}
+              onClick={() => approveSequence(originalSequence.id)}
               className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs cursor-pointer"
             >
               <Check className="h-3.5 w-3.5" />
@@ -752,8 +752,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                       <Button
                         size="sm"
                         onClick={() => {
-                          assignSequenceToLead(lead.id, id);
-                          toast.success(`Enrolled ${lead.firstName} into ${originalSequence?.name}!`);
+                          void assignSequenceToLead(lead.id, id);
                         }}
                         className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer"
                       >

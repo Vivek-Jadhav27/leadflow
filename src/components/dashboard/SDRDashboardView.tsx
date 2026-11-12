@@ -47,7 +47,7 @@ export function SDRDashboardView() {
     advanceLeadStep,
     markReply,
     createTask,
-    createLead,
+    today,
   } = useCRM();
 
   // Search & Filter state
@@ -70,7 +70,7 @@ export function SDRDashboardView() {
   const [newTaskPriority, setNewTaskPriority] = useState<Task['priority']>('medium');
 
   // Use local date (e.g. 2026-11-03) instead of UTC date string to avoid timezone date shifts
-  const todayStr = useMemo(() => getTodayString(), []);
+  const todayStr = today;
   const todayFormatted = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', {
       weekday: 'long',
@@ -350,13 +350,12 @@ export function SDRDashboardView() {
   };
 
   const handleMarkSent = (item: typeof todayItems[0]) => {
+    // Completing a step task advances the cadence on the server; a lead with no open task is advanced directly.
     if (item.task) {
-      updateTaskStatus(item.task.id, 'completed');
+      void updateTaskStatus(item.task.id, 'completed');
+    } else if (item.lead?.id) {
+      void advanceLeadStep(item.lead.id);
     }
-    if (item.lead?.id) {
-      advanceLeadStep(item.lead.id);
-    }
-    toast.success(`✓ Marked sent for ${item.lead.firstName}! Cadence advanced.`);
   };
 
   const handleOpenLinkedIn = (linkedinUrl: string) => {
@@ -368,29 +367,27 @@ export function SDRDashboardView() {
     window.open(cleanUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const handleRescheduleSubmit = (e: React.FormEvent) => {
+  const handleRescheduleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reschedulingTask || !rescheduleDate) return;
-    rescheduleTask(reschedulingTask.id, rescheduleDate);
-    toast.success(`Task rescheduled to ${rescheduleDate}`);
+    const ok = await rescheduleTask(reschedulingTask.id, rescheduleDate);
+    if (!ok) return;
     setReschedulingTask(null);
     setRescheduleDate('');
   };
 
-  const handleLogReplySubmit = (e: React.FormEvent) => {
+  const handleLogReplySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyLead) return;
-    markReply(replyLead.lead.id, replyMessage, replyOutcome);
-    if (replyLead.task) {
-      updateTaskStatus(replyLead.task.id, 'completed');
-    }
-    toast.success(`Reply recorded (${replyOutcome}) for ${replyLead.lead.firstName}. Automated follow-ups halted.`);
+    // The server halts follow-ups, closes the related tasks and creates the review task in one transaction.
+    const updated = await markReply(replyLead.lead.id, replyMessage, replyOutcome);
+    if (!updated) return;
     setReplyLead(null);
     setReplyMessage('');
     setReplyOutcome('Interested');
   };
 
-  const handleCreateQuickTask = (e: React.FormEvent) => {
+  const handleCreateQuickTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) return;
 
@@ -400,96 +397,17 @@ export function SDRDashboardView() {
       return;
     }
 
-    createTask({
+    const created = await createTask({
       title: newTaskTitle.trim(),
       leadId: lead.id,
-      leadName: `${lead.firstName} ${lead.lastName}`,
-      leadCompany: lead.company,
-      leadLinkedin: lead.linkedinUrl,
       type: newTaskType,
       dueDate: todayStr,
-      assignedToId: user?.uid || (user?.role === 'ae' ? 'ae_current' : 'sdr_current'),
-      assignedToName: user?.displayName || user?.email || (user?.role === 'ae' ? 'Account Executive' : 'Outbound SDR'),
       priority: newTaskPriority,
-      status: 'pending',
     });
+    if (!created) return;
 
     setIsNewTaskOpen(false);
     setNewTaskTitle('');
-    toast.success(`Task scheduled for ${lead.firstName} today!`);
-  };
-
-  // Seed sample leads for demo / testing if workspace is empty
-  const handleSeedSampleLeads = () => {
-    const samples = [
-      {
-        firstName: 'Sarah',
-        lastName: 'Jenkins',
-        company: 'HyperScale AI',
-        jobTitle: 'VP of Sales & Revenue Operations',
-        email: 'sarah.jenkins@hyperscale.ai',
-        linkedinUrl: 'https://www.linkedin.com/in/sarah-jenkins-sales',
-        sequenceName: 'Enterprise SaaS 4-Step Cadence',
-        currentStepNumber: 1,
-        outreachStatus: 'in_sequence' as const,
-        connectionStatus: 'pending' as const,
-        disposition: 'active' as const,
-        channel: 'linkedin' as const,
-      },
-      {
-        firstName: 'David',
-        lastName: 'Kim',
-        company: 'NextGen Cloud',
-        jobTitle: 'Head of Business Development',
-        email: 'dkim@nextgencloud.io',
-        linkedinUrl: 'https://www.linkedin.com/in/davidkim-b2b',
-        sequenceName: 'Outbound Cold Prospecting',
-        currentStepNumber: 2,
-        outreachStatus: 'followup_due' as const,
-        connectionStatus: 'connected' as const,
-        disposition: 'active' as const,
-        channel: 'linkedin' as const,
-      },
-      {
-        firstName: 'Elena',
-        lastName: 'Rostova',
-        company: 'DataSphere Tech',
-        jobTitle: 'Director of Growth & Demand Gen',
-        email: 'elena@datasphere.com',
-        linkedinUrl: 'https://www.linkedin.com/in/elena-rostova-growth',
-        sequenceName: 'Enterprise SaaS 4-Step Cadence',
-        currentStepNumber: 3,
-        outreachStatus: 'followup_due' as const,
-        connectionStatus: 'connected' as const,
-        disposition: 'active' as const,
-        channel: 'linkedin' as const,
-      },
-    ];
-
-    samples.forEach((s) => {
-      const created = createLead(s);
-      if (created) {
-        const isFollowup = s.currentStepNumber > 1;
-        createTask({
-          title: isFollowup
-            ? `Follow-up Step ${s.currentStepNumber} with ${s.firstName} ${s.lastName}`
-            : `Send Step 1 LinkedIn Message to ${s.firstName} ${s.lastName}`,
-          leadId: created.id,
-          leadName: `${s.firstName} ${s.lastName}`,
-          leadCompany: s.company,
-          leadLinkedin: s.linkedinUrl,
-          type: isFollowup ? 'followup' : 'linkedin_message',
-          dueDate: todayStr,
-          assignedToId: user?.uid || (user?.role === 'ae' ? 'ae_current' : 'sdr_current'),
-          assignedToName: user?.displayName || user?.email || (user?.role === 'ae' ? 'Account Executive' : 'Outbound SDR'),
-          priority: 'high',
-          status: 'pending',
-          stepNumber: s.currentStepNumber,
-        });
-      }
-    });
-
-    toast.success('Added 3 sample leads with scheduled tasks for today!');
   };
 
   return (
@@ -528,18 +446,6 @@ export function SDRDashboardView() {
               <span>Add Today&apos;s Task</span>
             </Button>
 
-            {todayItems.length === 0 && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleSeedSampleLeads}
-                className="h-8.5 px-3 border-[#cbd6e2] text-[#2d3e50] hover:bg-[#f8fafc] text-xs font-semibold gap-1.5"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-[#ff7a59]" />
-                <span>Seed Sample Leads</span>
-              </Button>
-            )}
           </div>
         </div>
 

@@ -101,7 +101,7 @@ export default function SequencesPage() {
     return true;
   });
 
-  const handleCreateSequence = (e: React.FormEvent) => {
+  const handleCreateSequence = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSeqName.trim()) return;
 
@@ -175,19 +175,17 @@ export default function SequencesPage() {
       steps: defaultSteps,
     };
 
-    saveSequence(newSeq);
+    // The server decides the id, approval state and ownership; navigate only once it has saved.
+    const saved = await saveSequence(newSeq);
+    if (!saved) return;
     setIsCreating(false);
     setNewSeqName('');
     setNewSeqDesc('');
     setNewSeqTargetRole('all');
-    setNewSeqName('');
-    setNewSeqDesc('');
-    toast.success(
-      isAdmin
-        ? `Sequence "${newSeq.name}" created and approved!`
-        : `Sequence "${newSeq.name}" created! Awaiting Admin approval per Decision 3.`
-    );
-    router.push(ROUTES.SEQUENCE_DETAIL(newSeq.id));
+    if (!isAdmin) {
+      toast.info('Awaiting Admin approval before this sequence can be used.');
+    }
+    router.push(ROUTES.SEQUENCE_DETAIL(saved.id));
   };
 
   return (
@@ -437,7 +435,7 @@ export default function SequencesPage() {
                   {!isApproved && isOwnerOrAdmin && (
                     <Button
                       size="sm"
-                      onClick={() => approveSequence(seq.id, user?.displayName || user?.email || 'Admin')}
+                      onClick={() => approveSequence(seq.id)}
                       className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1 cursor-pointer"
                       title="Approve this sequence as Admin"
                     >
@@ -580,7 +578,7 @@ export default function SequencesPage() {
       <ConfirmDialog
         isOpen={!!deletingSeqId}
         title="Delete Sequence"
-        description="Are you sure you want to delete this sequence? Leads enrolled in this sequence will become unassigned."
+        description="Are you sure you want to delete this sequence? A sequence that still has enrolled leads cannot be deleted; unenroll them first."
         confirmLabel="Delete Sequence"
         onConfirm={() => {
           if (deletingSeqId) {

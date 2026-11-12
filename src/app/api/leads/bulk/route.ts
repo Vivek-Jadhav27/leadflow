@@ -5,7 +5,8 @@ import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceMember } from '@/lib/serverAuth';
-import { MAX_BATCH, cleanObject, normalizeLinkedinUrl, resolveAssignee, str } from '@/lib/leadValidation';
+import { buildCreationExtras, getContext } from '@/lib/crmEngine';
+import { cleanObject, normalizeLinkedinUrl, resolveAssignee, str } from '@/lib/leadValidation';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -140,10 +141,26 @@ export async function POST(req: NextRequest) {
       return true;
     });
 
-    for (let i = 0; i < toWrite.length; i += MAX_BATCH) {
+    // Each imported lead gets a 'lead captured' activity and, if a sequence was chosen, its first task.
+    // Chunked so a batch (lead + activity + task per lead) stays well under Firestore's 500-write limit.
+    let seqDoc: Record<string, any> | null = null;
+    if (sequenceId) {
+      const seqSnap = await adminDb.collection('sequences').doc(sequenceId).get();
+      seqDoc = { id: seqSnap.id, ...seqSnap.data() };
+    }
+    const planCtx = await getContext({ uid, email, name: assignee.name, role, workspaceId });
+    const createdTasks: Record<string, any>[] = [];
+    const createdActivities: Record<string, any>[] = [];
+    const CHUNK = 150;
+    for (let i = 0; i < toWrite.length; i += CHUNK) {
       const batch = adminDb.batch();
-      for (const lead of toWrite.slice(i, i + MAX_BATCH)) {
+      for (const lead of toWrite.slice(i, i + CHUNK)) {
         batch.set(adminDb.collection('leads').doc(lead.id), cleanObject(lead));
+        const extras = buildCreationExtras(lead, seqDoc, planCtx);
+        extras.tasks.forEach((t) => batch.set(adminDb.collection('tasks').doc(t.id), t));
+        extras.activities.forEach((a) => batch.set(adminDb.collection('activities').doc(a.id), a));
+        createdTasks.push(...extras.tasks);
+        createdActivities.push(...extras.activities);
       }
       await batch.commit();
     }
@@ -155,6 +172,8 @@ export async function POST(req: NextRequest) {
         skipped: rejected.length,
         rejected: rejected.slice(0, 100),
         leads: toWrite,
+        tasks: createdTasks,
+        activities: createdActivities,
         message: `Imported ${toWrite.length} lead(s); skipped ${rejected.length}.`,
       },
       201

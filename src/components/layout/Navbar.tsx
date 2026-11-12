@@ -26,7 +26,7 @@ export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout, switchRole, isAdmin, role } = useAuthContext();
-  const { stats, tasks, resetToDefaults } = useCRM();
+  const { stats, tasks } = useCRM();
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -262,16 +262,6 @@ export const Navbar: React.FC = () => {
                       <span>Explore Journey Canvas</span>
                     </Link>
 
-                    <button
-                      onClick={() => {
-                        resetToDefaults();
-                        setProfileMenuOpen(false);
-                      }}
-                      className="w-full text-left px-2 py-1.5 rounded hover:bg-[#f5f8fa] flex items-center gap-2 text-xs text-[#33475b]"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5 text-[#7c98b6]" />
-                      <span>Reload Sample Data</span>
-                    </button>
                   </div>
 
                   <div className="border-t border-[#eaf0f6] pt-1">

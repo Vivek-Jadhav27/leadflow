@@ -67,13 +67,19 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     saveSequence,
     approveSequence,
     addActivityEvent,
+    submitCustomSequence,
+    loadActivities,
+    bulkAssign,
   } = useCRM();
 
   const lead = React.useMemo(() => {
-    const direct = leads.find((l) => l.id === id);
-    if (direct) return direct;
-    return leads.find((l) => l.activityHistory?.some((a) => a.id?.includes(id)));
+    return leads.find((l) => l.id === id);
   }, [leads, id]);
+
+  // The activity log lives on the server; fetch this lead's entries when the page opens.
+  React.useEffect(() => {
+    if (id) void loadActivities(id);
+  }, [id, loadActivities]);
 
   // Combine stored lead activity history with global activity log
   const leadActivities = React.useMemo(() => {
@@ -279,66 +285,21 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     ? (lead?.outreachStatus === 'needs_sequence' ? 'needs_sequence' : 'unassigned')
     : (lead?.outreachStatus || 'unassigned');
 
-  // Auto-heal: If lead has no sequence assigned, its outreachStatus cannot be in_sequence
-  React.useEffect(() => {
-    if (lead && !lead.sequenceId && !sequence && lead.outreachStatus === 'in_sequence') {
-      updateLead(lead.id, {
-        outreachStatus: 'unassigned',
-        currentStepNumber: 0,
-        nextActionTitle: null,
-      });
-    }
-  }, [lead?.id, lead?.sequenceId, sequence, lead?.outreachStatus, updateLead]);
-
-  // Auto-heal: If cadence is already approved by Admin, transition lead to in_sequence immediately
-  React.useEffect(() => {
-    if (
-      lead &&
-      sequence &&
-      (sequence.approvalStatus === 'approved' || sequence.status === 'active') &&
-      lead.outreachStatus === 'pending_sequence_approval'
-    ) {
-      const step2 = sequence.steps?.[1] || sequence.steps?.find((s) => s.stepNumber === 2);
-      updateLead(lead.id, {
-        sequenceId: sequence.id,
-        sequenceName: sequence.name,
-        outreachStatus: 'in_sequence',
-        currentStepNumber: lead.currentStepNumber > 1 ? lead.currentStepNumber : 2,
-        nextActionTitle: step2?.title || 'Step 2: Follow-up 1',
-        nextFollowUpDate: lead.nextFollowUpDate || new Date().toISOString().split('T')[0],
-      });
-    }
-  }, [lead?.id, lead?.outreachStatus, sequence?.id, sequence?.approvalStatus, sequence?.status, updateLead]);
-
   // Handle Admin changing sequence start date
-  const handleRescheduleStartDate = (newDate: string) => {
+  const handleRescheduleStartDate = async (newDate: string) => {
     if (!lead || !newDate || newDate === lead.nextFollowUpDate) return;
     const oldDate = lead.nextFollowUpDate || 'Immediate';
 
-    const updatedActivity: ActivityEvent = {
-      id: `act_${Date.now()}_resched`,
+    // The server also moves the lead's open step task to the new date.
+    const updated = await updateLead(lead.id, { nextFollowUpDate: newDate, sequenceStartDate: newDate });
+    if (!updated) return;
+
+    await addActivityEvent({
       leadId: lead.id,
-      leadName: `${lead.firstName} ${lead.lastName}`,
       type: 'sequence_rescheduled',
       title: 'Cadence Start Date Changed',
-      description: `Admin updated cadence start date from ${oldDate} to ${newDate}. All subsequent cadence steps shifted accordingly.`,
-      actorName: user?.displayName || (user?.email ? user.email.split('@')[0] : 'Admin'),
-      timestamp: new Date().toISOString(),
-    };
-
-    const newActivityHistory = [updatedActivity, ...(lead.activityHistory || [])];
-
-    // Update lead in store and Firestore
-    updateLead(lead.id, {
-      nextFollowUpDate: newDate,
-      sequenceStartDate: newDate,
-      activityHistory: newActivityHistory,
+      description: `Cadence start date changed from ${oldDate} to ${newDate}. The open step task moved with it.`,
     });
-
-    // Also register in global activity log
-    addActivityEvent(updatedActivity);
-
-    toast.success(`Cadence schedule updated to start on ${newDate}`);
   };
 
   // SDR team members list strictly excluding admin/owner accounts
@@ -590,54 +551,14 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         });
       }
 
-      const newSeq: Sequence = {
-        id: seqId,
+      const submitted = await submitCustomSequence(lead.id, {
         name: customSeqName.trim() || `Custom Cadence: ${lead.firstName} ${lead.lastName}`,
-        channel: 'linkedin',
-        description: `Custom outreach cadence created by ${user?.email || 'SDR'} for ${lead.firstName} ${lead.lastName} at ${lead.company}.`,
         steps: seqSteps,
-        status: 'pending_approval',
-        approvalStatus: 'pending',
-        workspaceId: lead.workspaceId || null,
-        createdBy: user?.email || 'Outbound SDR',
-        createdByUid: user?.uid || null,
-        createdByRole: isAdmin ? 'admin' : 'sdr',
-        targetRole: 'sdr',
-        isCustom: true,
-        targetLeadId: lead.id,
-        targetLeadName: `${lead.firstName} ${lead.lastName}`,
-        targetLeadCompany: lead.company,
-        targetLeadLinkedin: lead.linkedinUrl,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveSequence(newSeq);
-
-      updateLead(lead.id, {
-        sequenceId: newSeq.id,
-        sequenceName: newSeq.name,
-        currentStepNumber: 2,
-        totalSteps: seqSteps.length,
-        outreachStatus: 'pending_sequence_approval',
-        nextActionTitle: 'Awaiting Admin Approval',
-        sequenceMode: 'custom',
-        customSteps: seqSteps,
         connectionNote: connectionNoteSent || lead.connectionNote || null,
       });
-
-      addActivityEvent({
-        leadId: lead.id,
-        leadName: `${lead.firstName} ${lead.lastName}`,
-        type: 'sequence_assigned',
-        title: 'Custom Cadence Submitted for Admin Approval',
-        description: `Bespoke ${seqSteps.length}-step sequence "${newSeq.name}" submitted for Admin approval by ${user?.email || 'SDR'}.`,
-        actorName: user?.displayName || user?.email || 'Outbound SDR',
-        timestamp: new Date().toISOString(),
-      });
-
+      if (!submitted) return;
       setIsCreateSeqOpen(false);
-      toast.success(`✓ Sequence "${newSeq.name}" submitted for Admin approval!`);
+
     } catch (err: any) {
       toast.error('Failed to submit sequence: ' + err?.message);
     } finally {
@@ -700,19 +621,23 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
       techStack: enrichTech.split(',').map((s) => s.trim()).filter(Boolean),
       enrichmentNotes: enrichNotes.trim(),
     };
-    enrichLead(lead.id, data);
-    setIsEnrichOpen(false);
+    void enrichLead(lead.id, data).then((ok) => {
+      if (ok) setIsEnrichOpen(false);
+    });
   };
 
   const handleRecordReply = (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim()) return;
-    markReply(lead.id, replyText.trim(), 'Interested');
-    setReplyText('');
-    setIsReplyOpen(false);
+    void markReply(lead.id, replyText.trim(), 'Interested').then((ok) => {
+      if (ok) {
+        setReplyText('');
+        setIsReplyOpen(false);
+      }
+    });
   };
 
-  const handleSetConnectionStatus = (status: ConnectionStatus) => {
+  const handleSetConnectionStatus = async (status: ConnectionStatus) => {
     if (!lead) return;
 
     let title = `LinkedIn Connection: ${status}`;
@@ -743,20 +668,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
       timestamp: new Date().toISOString(),
     };
 
-    const newActivityHistory = [newAct, ...(lead.activityHistory || [])];
-
-    updateLead(lead.id, {
-      connectionStatus: status,
-      activityHistory: newActivityHistory,
-    });
-
-    addActivityEvent(newAct);
-
-    toast.success(
-      status === 'connected'
-        ? `Marked as Accepted! Lead is now Connected.`
-        : `LinkedIn connection updated to: ${status}`
-    );
+    const updated = await updateLead(lead.id, { connectionStatus: status });
+    if (!updated) return;
+    await addActivityEvent({ leadId: lead.id, type: newAct.type, title, description: desc });
   };
 
   const handleAdvanceStep = () => {
@@ -1216,22 +1130,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     onChange={(e) => {
                       const newId = e.target.value;
                       if (!newId) {
-                        updateLead(lead.id, {
-                          assignedToId: null,
-                          assignedToName: null,
-                          assignedToEmail: null,
-                        });
-                        toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
+                        toast.info('Every lead needs an owner. Choose a team member to reassign it.');
                       } else {
-                        const member = availableTeamMembers.find((m) => m.id === newId);
-                        if (member) {
-                          updateLead(lead.id, {
-                            assignedToId: member.id,
-                            assignedToName: member.name,
-                            assignedToEmail: member.email,
-                          });
-                          toast.success(`Shifted ${lead.firstName} to ${member.name}`);
-                        }
+                        void bulkAssign([lead.id], newId);
                       }
                     }}
                     className="w-full rounded-md border border-[#cbd8eb] px-2.5 py-1.5 text-xs bg-white text-[#33475b] font-medium focus:border-[#ff7a59] focus:outline-none"
@@ -1395,12 +1296,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     <Button
                       size="sm"
                       onClick={() => {
-                        approveSequence(sequence.id);
-                        updateLead(lead.id, {
-                          outreachStatus: 'in_sequence',
-                          nextActionTitle: sequence.steps?.[1]?.title || 'Step 2: Follow-up 1',
-                        });
-                        toast.success(`✓ Sequence "${sequence.name}" approved! Follow-up tasks are now active.`);
+                        void approveSequence(sequence.id);
                       }}
                       className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 cursor-pointer gap-1.5"
                     >
@@ -2059,9 +1955,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         title="Delete Lead"
         description={`Are you sure you want to delete ${lead.firstName} ${lead.lastName}? This action cannot be undone.`}
         confirmLabel="Delete Lead"
-        onConfirm={() => {
-          deleteLead(lead.id);
-          router.push(ROUTES.LEADS);
+        onConfirm={async () => {
+          const ok = await deleteLead(lead.id);
+          if (ok) router.push(ROUTES.LEADS);
         }}
         onClose={() => setIsDeleteOpen(false)}
       />
