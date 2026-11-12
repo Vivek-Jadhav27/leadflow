@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceAdmin, requireWorkspaceMember } from '@/lib/serverAuth';
-import { sanitizeSteps, str } from '@/lib/leadValidation';
+import { editorStamp, sanitizeSteps, str } from '@/lib/leadValidation';
 import { approveSequence } from '@/lib/crmEngine';
 import type { EngineResult } from '@/lib/crmEngine';
 
@@ -107,11 +107,13 @@ export async function POST(req: NextRequest) {
       status,
       approvalStatus,
       approvedBy: isApproved ? (wasApproved ? existing?.approvedBy || email : email) : null,
+      approvedByUid: isApproved ? (wasApproved ? existing?.approvedByUid || uid : uid) : null,
       approvedAt: isApproved ? (wasApproved ? existing?.approvedAt || now : now) : null,
       workspaceId,
-      createdBy: existing?.createdBy || email,
-      createdByUid: existing?.createdByUid || uid,
-      createdByRole: existing?.createdByRole || role,
+      // Ownership is set once at creation. An edit (including by an admin) never changes it.
+      createdBy: existing ? existing.createdBy ?? null : email,
+      createdByUid: existing ? existing.createdByUid ?? null : uid,
+      createdByRole: existing ? existing.createdByRole ?? null : role,
       targetRole: ['all', 'sdr', 'ae'].includes(body.targetRole) ? body.targetRole : existing?.targetRole || 'all',
       isCustom: Boolean(existing?.isCustom),
       targetLeadId: existing?.targetLeadId || null,
@@ -121,7 +123,7 @@ export async function POST(req: NextRequest) {
       enrolledLeadsCount: existing?.enrolledLeadsCount || 0,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
-      updatedBy: email,
+      ...editorStamp({ uid, email, name: auth.context.profile?.name || email.split('@')[0], role }),
     };
 
     await adminDb.collection('sequences').doc(seqId).set(sequenceData, { merge: true });

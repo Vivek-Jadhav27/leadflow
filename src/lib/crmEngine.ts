@@ -6,7 +6,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import type { Transaction } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebaseAdmin';
-import { canAccessLead, resolveAssignee, sanitizeSteps } from '@/lib/leadValidation';
+import { canAccessLead, editorStamp, resolveAssignee, sanitizeSteps } from '@/lib/leadValidation';
 import {
   Actor,
   Doc,
@@ -256,7 +256,7 @@ export async function submitCustomSequence(
       enrolledLeadsCount: 0,
       createdAt: existing.data()?.createdAt || ctx.now,
       updatedAt: ctx.now,
-      updatedBy: actor.email,
+      ...editorStamp(actor),
     };
 
     const leadUpdate: Doc = {
@@ -304,9 +304,10 @@ export async function approveSequence(actor: Actor, sequenceId: string): Promise
       status: 'active',
       approvalStatus: 'approved',
       approvedBy: actor.email || actor.name,
+      approvedByUid: actor.uid,
       approvedAt: ctx.now,
       updatedAt: ctx.now,
-      updatedBy: actor.email,
+      ...editorStamp(actor),
     };
     tx.update(adminDb.collection('sequences').doc(sequenceId), update);
     return { ...current, ...update };

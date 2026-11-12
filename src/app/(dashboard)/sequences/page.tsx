@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
+import { sequenceApproverLabel, sequenceEditorLabel, sequenceOwnerLabel } from '@/utils/sequenceLabels';
 import { useCRM } from '@/hooks/useCRM';
 import { useAuthContext } from '@/context/AuthProvider';
 import { ROUTES } from '@/constants/routes';
@@ -319,34 +320,18 @@ export default function SequencesPage() {
 
                       {/* Creator badge */}
                       <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 bg-slate-50 border border-slate-200">
-                        {(() => {
-                          const isCurrentUser =
-                            (user?.uid && seq.createdByUid === user.uid) ||
-                            (user?.email && seq.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
-                          if (isCurrentUser) {
-                            return user?.role === 'admin' ? 'Created by You (Admin)' : 'Created by You (SDR)';
-                          }
-                          const roleLabel = seq.createdByRole ? ` (${seq.createdByRole.toUpperCase()})` : '';
-                          const authorName = seq.createdBy ? seq.createdBy.split('@')[0] : 'SDR';
-                          return `Created by ${authorName}${roleLabel}`;
-                        })()}
+                        {sequenceOwnerLabel(seq, user)}
                       </span>
+                      {sequenceEditorLabel(seq, user) && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200">
+                          {sequenceEditorLabel(seq, user)}
+                        </span>
+                      )}
 
                       {/* Approval badge */}
                       {isApproved && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">
-                          {(() => {
-                            if (seq.approvedBy) {
-                              const isCurrentApprover =
-                                (user?.email && seq.approvedBy.toLowerCase().trim() === user.email.toLowerCase().trim()) ||
-                                (user?.displayName && seq.approvedBy.toLowerCase().trim() === user.displayName.toLowerCase().trim()) ||
-                                (isAdmin && seq.approvedBy === 'Workspace Admin');
-                              return isCurrentApprover
-                                ? 'Approved by You (Admin)'
-                                : `Approved by ${seq.approvedBy.split('@')[0]}`;
-                            }
-                            return 'Approved by Admin';
-                          })()}
+                          {sequenceApproverLabel(seq, user)}
                         </span>
                       )}
                     </>
@@ -363,19 +348,13 @@ export default function SequencesPage() {
                       </span>
 
                       <span className="px-2 py-0.5 rounded text-[10px] text-slate-500 bg-slate-50 border border-slate-200">
-                        {(() => {
-                          const isCurrentUser =
-                            (user?.uid && seq.createdByUid === user.uid) ||
-                            (user?.email && seq.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
-                          if (isCurrentUser) {
-                            return user?.role === 'admin' ? 'Created by You (Admin)' : 'Created by You (SDR)';
-                          }
-                          if (seq.createdByRole === 'admin' || seq.createdBy === 'Workspace Admin' || seq.createdBy?.toLowerCase().includes('admin')) {
-                            return 'Admin Cadence';
-                          }
-                          return `By ${seq.createdBy ? seq.createdBy.split('@')[0] : 'Member'}`;
-                        })()}
+                        {sequenceOwnerLabel(seq, user)}
                       </span>
+                      {sequenceEditorLabel(seq, user) && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200">
+                          {sequenceEditorLabel(seq, user)}
+                        </span>
+                      )}
 
                       {isApproved && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">

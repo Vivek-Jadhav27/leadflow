@@ -87,7 +87,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   const displayCompany = targetLead?.company || originalSequence?.targetLeadCompany || (originalSequence?.description?.match(/at\s+([^.]+)/i)?.[1]?.trim());
   const displayLinkedin = targetLead?.linkedinUrl || originalSequence?.targetLeadLinkedin;
   const displayJobTitle = targetLead?.jobTitle || 'Target Prospect';
-  const displayOwner = targetLead?.assignedToName || originalSequence?.createdBy || 'Assigned Rep';
+  const displayOwner = targetLead?.assignedToName || (originalSequence?.createdBy ? originalSequence.createdBy.split('@')[0] : 'Assigned Rep');
 
   // Editable sequence state
   const [seqName, setSeqName] = useState(originalSequence?.name || '');

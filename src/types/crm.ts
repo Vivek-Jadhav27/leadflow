@@ -116,12 +116,18 @@ export interface Sequence {
   status: 'active' | 'paused' | 'draft' | 'archived' | 'pending_approval';
   approvalStatus?: 'approved' | 'pending';
   approvedBy?: string;
+  approvedByUid?: string | null;
   approvedAt?: string;
   enrolledLeadsCount?: number;
   workspaceId?: string | null;
   createdBy?: string | null;
   createdByUid?: string | null;
   createdByRole?: 'admin' | 'sdr' | 'ae';
+  /** Who last edited the sequence. Never changes ownership (createdBy*). */
+  updatedBy?: string | null;
+  updatedByUid?: string | null;
+  updatedByName?: string | null;
+  updatedByRole?: 'admin' | 'sdr' | 'ae' | null;
   targetRole?: 'all' | 'sdr' | 'ae';
   isCustom?: boolean;
   targetLeadId?: string | null;

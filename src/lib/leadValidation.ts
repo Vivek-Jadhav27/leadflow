@@ -124,3 +124,11 @@ export function sanitizeSteps(input: unknown): Record<string, any>[] | null {
     enabled: s?.enabled !== false,
   }));
 }
+
+/**
+ * Audit stamp for "who last changed this". Ownership fields (createdBy*, createdByUid, createdByRole)
+ * are set once when a record is created and are never rewritten by an edit, an approval or a toggle.
+ */
+export function editorStamp(a: { uid: string; email: string; name: string; role: string }) {
+  return { updatedBy: a.email, updatedByUid: a.uid, updatedByName: a.name, updatedByRole: a.role };
+}

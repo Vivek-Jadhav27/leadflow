@@ -8,6 +8,7 @@ import { requireWorkspaceMember } from '@/lib/serverAuth';
 import { approveSequence } from '@/lib/crmEngine';
 import { PlanError } from '@/lib/crmPlanner';
 import { actorFrom, readJson, respond } from '@/lib/crmHttp';
+import { editorStamp } from '@/lib/leadValidation';
 
 /**
  *   approve    admin only; approves the sequence and activates leads explicitly waiting on it
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (seq.approvalStatus !== 'approved' && seq.status !== 'active' && seq.status !== 'paused') {
         throw new PlanError(409, 'SEQUENCE_NOT_APPROVED', 'Approve the sequence before activating it.');
       }
-      const update = { status: seq.status === 'active' ? 'paused' : 'active', updatedAt: now, updatedBy: actor.email };
+      const update = { status: seq.status === 'active' ? 'paused' : 'active', updatedAt: now, ...editorStamp(actor) };
       await ref.update(update);
       return { sequence: { id, ...seq, ...update }, tasks: [], activities: [] };
     }
