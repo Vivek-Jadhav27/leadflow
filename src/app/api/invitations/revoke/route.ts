@@ -2,17 +2,14 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import { requireWorkspaceAdmin } from '@/lib/serverAuth';
 import { adminDb } from '@/lib/firebaseAdmin';
 
 export async function POST(req: NextRequest) {
   try {
-    const context = await authenticateServerRequest(req);
-    if (!context || context.role !== 'admin' || !context.workspaceId) {
-      return NextResponse.json({ error: 'Unauthorized: Only workspace Admins can revoke invitations.' }, { status: 403 });
-    }
-
-    const { workspaceId, uid } = context;
+    const auth = await requireWorkspaceAdmin(req);
+    if (auth.response) return auth.response;
+    const { workspaceId, uid } = auth.context;
     const body = await req.json();
     const invitationId = body?.invitationId;
 

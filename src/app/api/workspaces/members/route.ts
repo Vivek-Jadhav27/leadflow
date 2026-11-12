@@ -2,21 +2,15 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import { requireWorkspaceAdmin, invalidateAuthCache } from '@/lib/serverAuth';
 import { adminDb, adminAuth } from '@/lib/firebaseAdmin';
 
 // GET: List workspace members and invitations
 export async function GET(req: NextRequest) {
   try {
-    const context = await authenticateServerRequest(req);
-    if (!context || !context.workspaceId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { workspaceId, role } = context;
-    if (role !== 'admin') {
-      return NextResponse.json({ error: 'Forbidden: Admin access required.' }, { status: 403 });
-    }
+    const auth = await requireWorkspaceAdmin(req);
+    if (auth.response) return auth.response;
+    const { workspaceId } = auth.context;
 
     // 1. Fetch workspace document to identify owner
     const wsDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
@@ -118,12 +112,9 @@ export async function GET(req: NextRequest) {
 // POST: Manage member status (suspend, activate, remove)
 export async function POST(req: NextRequest) {
   try {
-    const context = await authenticateServerRequest(req);
-    if (!context || !context.workspaceId || context.role !== 'admin') {
-      return NextResponse.json({ error: 'Unauthorized: Admin role required.' }, { status: 403 });
-    }
-
-    const { workspaceId, uid: callerUid } = context;
+    const auth = await requireWorkspaceAdmin(req);
+    if (auth.response) return auth.response;
+    const { workspaceId, uid: callerUid } = auth.context;
     const body = await req.json();
     const { targetUid, action } = body as {
       targetUid: string;
@@ -144,6 +135,12 @@ export async function POST(req: NextRequest) {
     if (targetUid === ownerId && (action === 'remove' || action === 'suspend')) {
       return NextResponse.json(
         { error: 'Cannot remove or suspend the workspace owner.' },
+        { status: 403 }
+      );
+    }
+    if (targetUid === callerUid && (action === 'remove' || action === 'suspend')) {
+      return NextResponse.json(
+        { error: 'You cannot remove or suspend your own membership.' },
         { status: 403 }
       );
     }
@@ -185,6 +182,24 @@ export async function POST(req: NextRequest) {
           currentWorkspaceId: null,
           updatedAt: now,
         });
+      }
+    }
+
+    if (newStatus === 'active') {
+      // Re-activation must restore the user's pointer to this (their only) workspace.
+      await adminDb.collection('users').doc(targetUid).set(
+        { currentWorkspaceId: workspaceId, updatedAt: now },
+        { merge: true }
+      );
+    }
+
+    // Make the change effective immediately: drop cached auth and revoke the user's sessions.
+    invalidateAuthCache(targetUid);
+    if (newStatus !== 'active') {
+      try {
+        await adminAuth.revokeRefreshTokens(targetUid);
+      } catch (revokeErr) {
+        console.warn('[WorkspaceMembers POST] Failed to revoke sessions:', revokeErr);
       }
     }
 

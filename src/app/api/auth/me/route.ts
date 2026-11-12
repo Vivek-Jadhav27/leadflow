@@ -8,15 +8,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const isConfigured = typeof isFirebaseAdminConfigured === 'function' ? isFirebaseAdminConfigured() : isFirebaseAdminConfigured;
-    if (!isConfigured) {
-      return NextResponse.json(
-        {
-          error: 'Firebase Admin SDK not configured.',
-          hint: 'Please add FIREBASE_SERVICE_ACCOUNT_KEY to your Vercel Project Settings > Environment Variables.',
-        },
-        { status: 503 }
-      );
+    if (!isFirebaseAdminConfigured()) {
+      return NextResponse.json({ error: 'Server is not configured.' }, { status: 503 });
     }
 
     const context = await authenticateServerRequest(req);
@@ -26,81 +19,11 @@ export async function GET(req: NextRequest) {
 
     const { uid, email, profile, role, workspaceId } = context;
 
-    const accessibleWorkspaces: Workspace[] = [];
-    const workspaceIdSet = new Set<string>();
-
-    // 1. Query workspaces where user is the owner (simple query, no composite index needed)
-    try {
-      const ownedWorkspacesSnap = await adminDb
-        .collection('workspaces')
-        .where('ownerId', '==', uid)
-        .get();
-
-      for (const wsDoc of ownedWorkspacesSnap.docs) {
-        const wsData = wsDoc.data() as Workspace;
-        if (wsData.status === 'active') {
-          accessibleWorkspaces.push(wsData);
-          workspaceIdSet.add(wsData.workspaceId);
-        }
-      }
-    } catch (e) {
-      console.warn('[AuthMe] Owned workspaces query error:', e);
-    }
-
-    // 2. Look up membership via profile.currentWorkspaceId (no composite index needed)
-    //    This avoids the FAILED_PRECONDITION error from collectionGroup queries.
-    const profileWorkspaceId = profile?.currentWorkspaceId;
-    if (profileWorkspaceId && !workspaceIdSet.has(profileWorkspaceId)) {
-      try {
-        const memberDoc = await adminDb
-          .collection('workspaces')
-          .doc(profileWorkspaceId)
-          .collection('members')
-          .doc(uid)
-          .get();
-
-        if (memberDoc.exists && memberDoc.data()?.status === 'active') {
-          const wsSnapshot = await adminDb.collection('workspaces').doc(profileWorkspaceId).get();
-          if (wsSnapshot.exists) {
-            const wsData = wsSnapshot.data() as Workspace;
-            if (wsData.status === 'active') {
-              accessibleWorkspaces.push(wsData);
-              workspaceIdSet.add(wsData.workspaceId);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[AuthMe] Membership lookup error:', e);
-      }
-    }
-
-    // 3. Resolve active workspace
+    // A user belongs to at most one workspace, and only an active membership counts.
     let currentWorkspace: Workspace | null = null;
-    const targetWsId =
-      workspaceId ||
-      profile?.currentWorkspaceId ||
-      (accessibleWorkspaces.length > 0 ? accessibleWorkspaces[0].workspaceId : null);
-
-    if (targetWsId) {
-      const found = accessibleWorkspaces.find((w) => w.workspaceId === targetWsId);
-      if (found) {
-        currentWorkspace = found;
-      } else {
-        try {
-          const activeWsDoc = await adminDb.collection('workspaces').doc(targetWsId).get();
-          if (activeWsDoc.exists) {
-            const wsData = activeWsDoc.data() as Workspace;
-            if (wsData.status === 'active') {
-              currentWorkspace = wsData;
-              if (!workspaceIdSet.has(wsData.workspaceId)) {
-                accessibleWorkspaces.push(wsData);
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('[AuthMe] Active workspace query error:', e);
-        }
-      }
+    if (workspaceId) {
+      const wsDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
+      if (wsDoc.exists) currentWorkspace = wsDoc.data() as Workspace;
     }
 
     return NextResponse.json({
@@ -109,21 +32,12 @@ export async function GET(req: NextRequest) {
       name: profile?.name || profile?.email?.split('@')[0] || 'User',
       role,
       status: profile?.status || 'active',
-      currentWorkspaceId: targetWsId,
+      currentWorkspaceId: workspaceId,
       currentWorkspace,
-      workspaces: accessibleWorkspaces,
+      workspaces: currentWorkspace ? [currentWorkspace] : [],
     });
   } catch (error) {
-    const errorMsg = (error as Error)?.message || 'Internal server error';
     console.error('[AuthMe] Error:', error);
-    return NextResponse.json(
-      {
-        error: errorMsg,
-        hint: errorMsg.includes('credentials')
-          ? 'Add FIREBASE_SERVICE_ACCOUNT_KEY in Vercel Project Settings > Environment Variables.'
-          : undefined,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

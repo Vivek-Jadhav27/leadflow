@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import type { Transaction } from 'firebase-admin/firestore';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import { authenticateServerRequest, invalidateAuthCache } from '@/lib/serverAuth';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { normalizeEmail } from '@/utils/validation';
 
@@ -73,6 +73,18 @@ export async function POST(req: NextRequest) {
       const wsData = wsDoc.data() as Record<string, any> | undefined;
       if (wsData?.status !== 'active') {
         throw new Error('WORKSPACE_INACTIVE');
+      }
+
+      // A user can belong to only one workspace; don't let an invite silently move or demote them.
+      const existingUserSnap = await transaction.get(adminDb.collection('users').doc(uid));
+      const existingWorkspaceId = existingUserSnap.data()?.currentWorkspaceId as string | undefined;
+      if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
+        const existingMemberSnap = await transaction.get(
+          adminDb.collection('workspaces').doc(existingWorkspaceId).collection('members').doc(uid)
+        );
+        if (existingMemberSnap.exists && existingMemberSnap.data()?.status === 'active') {
+          throw new Error('ALREADY_IN_WORKSPACE');
+        }
       }
 
       // 4. Update invitation record
@@ -149,6 +161,8 @@ export async function POST(req: NextRequest) {
       };
     });
 
+    invalidateAuthCache(uid);
+
     return NextResponse.json({
       success: true,
       workspaceId: result.workspaceId,
@@ -179,6 +193,12 @@ export async function POST(req: NextRequest) {
             'The signed-in email address does not match the email this invitation was sent to. Please log out and sign in with the invited email.',
         },
         { status: 403 }
+      );
+    }
+    if (err.message === 'ALREADY_IN_WORKSPACE') {
+      return NextResponse.json(
+        { error: 'This account already belongs to another workspace and cannot join a second one.' },
+        { status: 409 }
       );
     }
     if (err.message === 'WORKSPACE_INACTIVE') {

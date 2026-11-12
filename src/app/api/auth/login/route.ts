@@ -2,208 +2,125 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
+import { adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
 
+// Used by the Chrome extension. Responses are not credentialed (no Allow-Credentials).
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-workspace-id',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+function json(body: unknown, status: number) {
+  return NextResponse.json(body, { status, headers: corsHeaders });
+}
+
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
+  return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const email = (body.email || '').trim().toLowerCase();
-    const password = body.password || '';
+    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body?.password === 'string' ? body.password : '';
 
-    if (!email || !password) {
-      return NextResponse.json(
-        { error: 'Email and password are required.' },
-        { status: 400, headers: corsHeaders }
-      );
+    if (!email || !password || email.length > 254 || password.length > 1024) {
+      return json({ error: 'Email and password are required.' }, 400);
     }
 
-    const apiKey =
-      process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
-      process.env.FIREBASE_API_KEY ||
-      '';
+    const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY || '';
+    if (!apiKey || !isFirebaseAdminConfigured()) {
+      console.error('[API /auth/login] Server is missing Firebase configuration.');
+      return json({ error: 'Login is temporarily unavailable.' }, 503);
+    }
 
-    let idToken = '';
-    let uid = '';
-    let returnedEmail = email;
-    let displayName = email.split('@')[0];
-
-    // 1. Authenticate with Firebase Identity Toolkit REST API
-    let authSuccess = false;
-    if (apiKey) {
-      try {
-        const idpRes = await fetch(
-          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email,
-              password,
-              returnSecureToken: true,
-            }),
-          }
-        );
-
-        const idpData = await idpRes.json();
-        if (idpRes.ok) {
-          authSuccess = true;
-          idToken = idpData.idToken;
-          uid = idpData.localId;
-          returnedEmail = idpData.email || email;
-          displayName = idpData.displayName || displayName;
-        } else {
-          const errMsg = idpData?.error?.message || '';
-          if (
-            errMsg.includes('INVALID_LOGIN_CREDENTIALS') ||
-            errMsg.includes('INVALID_PASSWORD') ||
-            errMsg.includes('EMAIL_NOT_FOUND')
-          ) {
-            return NextResponse.json(
-              { error: 'Invalid email or password.' },
-              { status: 401, headers: corsHeaders }
-            );
-          }
-          if (errMsg.includes('USER_DISABLED')) {
-            return NextResponse.json(
-              { error: 'This account has been disabled.' },
-              { status: 403, headers: corsHeaders }
-            );
-          }
-          // If there is another specific error, return it
-          if (errMsg && !errMsg.includes('API key not valid')) {
-            return NextResponse.json(
-              { error: `Authentication failed: ${errMsg}` },
-              { status: 400, headers: corsHeaders }
-            );
-          }
+    // 1. The password is ALWAYS verified by Firebase Auth. There is no fallback that issues a token
+    //    without it: any failure here is a failed login.
+    let idpRes: Response;
+    try {
+      idpRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, returnSecureToken: true }),
         }
-      } catch (networkErr) {
-        console.warn('[API /auth/login] Identity Toolkit network error, trying Admin fallback:', networkErr);
-      }
-    }
-
-    // 2. Fallback via Firebase Admin SDK if configured
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    if (!authSuccess && isAdminReady) {
-      try {
-        const authUser = await adminAuth.getUserByEmail(email);
-        uid = authUser.uid;
-        returnedEmail = authUser.email || email;
-        displayName = authUser.displayName || displayName;
-        // Generate a verified custom token
-        idToken = await adminAuth.createCustomToken(uid);
-        authSuccess = true;
-      } catch (adminErr: any) {
-        if (adminErr?.code === 'auth/user-not-found') {
-          return NextResponse.json(
-            { error: 'Invalid email or password.' },
-            { status: 401, headers: corsHeaders }
-          );
-        }
-      }
-    }
-
-    if (!authSuccess || !uid) {
-      return NextResponse.json(
-        { error: 'Invalid email or password.' },
-        { status: 401, headers: corsHeaders }
       );
+    } catch (networkErr) {
+      console.error('[API /auth/login] Identity Toolkit network error:', networkErr);
+      return json({ error: 'Login is temporarily unavailable.' }, 503);
     }
 
-    // 3. Resolve user profile, workspace, and role from Firestore
+    const idpData = await idpRes.json().catch(() => ({}));
+    if (!idpRes.ok) {
+      const errMsg: string = idpData?.error?.message || '';
+      if (errMsg.includes('USER_DISABLED')) {
+        return json({ error: 'This account has been disabled.' }, 403);
+      }
+      if (errMsg.includes('TOO_MANY_ATTEMPTS')) {
+        return json({ error: 'Too many attempts. Please try again later.' }, 429);
+      }
+      if (
+        errMsg.includes('INVALID_LOGIN_CREDENTIALS') ||
+        errMsg.includes('INVALID_PASSWORD') ||
+        errMsg.includes('EMAIL_NOT_FOUND') ||
+        errMsg.includes('INVALID_EMAIL')
+      ) {
+        return json({ error: 'Invalid email or password.' }, 401);
+      }
+      console.error('[API /auth/login] Identity Toolkit error:', errMsg);
+      return json({ error: 'Login is temporarily unavailable.' }, 502);
+    }
+
+    const idToken: string = idpData.idToken;
+    const uid: string = idpData.localId;
+    const returnedEmail: string = idpData.email || email;
+    let displayName: string = idpData.displayName || email.split('@')[0];
+
+    // 2. Resolve profile, workspace and role from Firestore. Fail closed if it can't be read.
     let role = 'sdr';
-    let workspaceId = null;
-    let workspaceName = 'LeadFlow Workspace';
-
-    if (isAdminReady) {
-      try {
-        const userDoc = await adminDb.collection('users').doc(uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          if (userData?.status === 'disabled') {
-            return NextResponse.json(
-              { error: 'Your account is deactivated.' },
-              { status: 403, headers: corsHeaders }
-            );
-          }
-          role = userData?.role || 'sdr';
-          workspaceId = userData?.currentWorkspaceId || null;
-          displayName = userData?.name || userData?.displayName || displayName;
-        }
-
-        if (workspaceId) {
-          const wsDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
-          if (wsDoc.exists) {
-            workspaceName = wsDoc.data()?.companyName || workspaceName;
-          }
-
-          // Check workspace membership status
-          const memberDoc = await adminDb
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('members')
-            .doc(uid)
-            .get();
-
-          if (memberDoc.exists) {
-            const memberData = memberDoc.data();
-            if (memberData?.status === 'suspended' || memberData?.status === 'removed') {
-              return NextResponse.json(
-                { error: 'Your workspace membership is suspended or removed.' },
-                { status: 403, headers: corsHeaders }
-              );
-            }
-            if (memberData?.role) {
-              role = memberData.role;
-            }
-          }
-        }
-      } catch (dbErr) {
-        console.warn('[API /auth/login] Firestore lookup warning:', dbErr);
+    let workspaceId: string | null = null;
+    let workspaceName = '';
+    try {
+      const userDoc = await adminDb.collection('users').doc(uid).get();
+      const userData = userDoc.data();
+      if (userData?.status === 'disabled') {
+        return json({ error: 'Your account is deactivated.' }, 403);
       }
+      displayName = userData?.name || userData?.displayName || displayName;
+      const candidateWorkspaceId: string | undefined = userData?.currentWorkspaceId;
+
+      if (candidateWorkspaceId) {
+        const [wsDoc, memberDoc] = await Promise.all([
+          adminDb.collection('workspaces').doc(candidateWorkspaceId).get(),
+          adminDb.collection('workspaces').doc(candidateWorkspaceId).collection('members').doc(uid).get(),
+        ]);
+        const memberData = memberDoc.data();
+        if (memberDoc.exists && memberData?.status !== 'active') {
+          return json({ error: 'Your workspace membership is suspended or removed.' }, 403);
+        }
+        if (memberDoc.exists && wsDoc.exists && wsDoc.data()?.status === 'active') {
+          workspaceId = candidateWorkspaceId;
+          workspaceName = wsDoc.data()?.companyName || '';
+          role = memberData?.role || 'sdr';
+        }
+      }
+    } catch (dbErr) {
+      console.error('[API /auth/login] Firestore lookup failed:', dbErr);
+      return json({ error: 'Login is temporarily unavailable.' }, 503);
     }
 
-    return NextResponse.json(
+    return json(
       {
         success: true,
         token: idToken,
-        user: {
-          uid,
-          email: returnedEmail,
-          displayName,
-          role,
-          workspaceId,
-          workspaceName,
-        },
+        user: { uid, email: returnedEmail, displayName, role, workspaceId, workspaceName },
       },
-      {
-        status: 200,
-        headers: corsHeaders,
-      }
+      200
     );
-  } catch (error: any) {
-    console.error('API /auth/login POST error:', error);
-    return NextResponse.json(
-      { error: error?.message || 'Login failed.' },
-      { status: 500, headers: corsHeaders }
-    );
+  } catch (error) {
+    console.error('[API /auth/login] Error:', error);
+    return json({ error: 'Login failed.' }, 500);
   }
 }
-

@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import { requireWorkspaceAdmin } from '@/lib/serverAuth';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { emailService } from '@/lib/emailService';
 import { inviteSDRSchema } from '@/schemas/auth.schema';
@@ -11,22 +11,9 @@ import { normalizeEmail } from '@/utils/validation';
 
 export async function POST(req: NextRequest) {
   try {
-    const context = await authenticateServerRequest(req);
-    if (!context) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    if (context.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Forbidden: Only workspace Admins can invite team members.' },
-        { status: 403 }
-      );
-    }
-
-    const { workspaceId, uid } = context;
-    if (!workspaceId) {
-      return NextResponse.json({ error: 'No active workspace selected.' }, { status: 400 });
-    }
+    const auth = await requireWorkspaceAdmin(req);
+    if (auth.response) return auth.response;
+    const { workspaceId, uid } = auth.context;
 
     // Verify workspace exists and is active
     const wsDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
@@ -61,6 +48,22 @@ export async function POST(req: NextRequest) {
 
     if (!existingUsers.empty) {
       const existingUid = existingUsers.docs[0].id;
+      // A user can belong to only one workspace.
+      const otherWorkspaceId = existingUsers.docs[0].data().currentWorkspaceId;
+      if (otherWorkspaceId && otherWorkspaceId !== workspaceId) {
+        const otherMember = await adminDb
+          .collection('workspaces')
+          .doc(otherWorkspaceId)
+          .collection('members')
+          .doc(existingUid)
+          .get();
+        if (otherMember.exists && otherMember.data()?.status === 'active') {
+          return NextResponse.json(
+            { error: 'This person already belongs to another workspace.' },
+            { status: 409 }
+          );
+        }
+      }
       const existingMemberDoc = await adminDb
         .collection('workspaces')
         .doc(workspaceId)
@@ -112,10 +115,8 @@ export async function POST(req: NextRequest) {
     const expiresAt = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
 
     // 4. Construct invitation link using request host or configured base URL
-    const origin =
-      process.env.NEXT_PUBLIC_APP_URL ||
-      req.headers.get('origin') ||
-      `https://${req.headers.get('host') || 'localhost:3000'}`;
+    // Never build the link from client-controlled headers.
+    const origin = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
 
     const invitationLink = `${origin}/invite/accept?token=${rawToken}`;
 

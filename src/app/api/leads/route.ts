@@ -1,793 +1,472 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import * as fs from 'fs';
-import * as path from 'path';
-import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import type { Query, DocumentData } from 'firebase-admin/firestore';
+import { adminDb } from '@/lib/firebaseAdmin';
+import { requireWorkspaceMember } from '@/lib/serverAuth';
+import {
+  MAX_BATCH,
+  canAccessLead,
+  cleanObject,
+  normalizeLinkedinUrl,
+  resolveAssignee,
+  sanitizeLeadUpdate,
+  str,
+} from '@/lib/leadValidation';
 
-// CORS headers to permit Chrome Extension requests from any origin or chrome-extension://
+// Responses are not credentialed (no Allow-Credentials), so browsers never attach cookies to
+// cross-origin calls; the Chrome extension authenticates with a Bearer token.
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-workspace-id',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-// Use /tmp on Vercel/serverless environments because process.cwd() is read-only
-const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const DATA_DIR = isServerless ? path.join('/tmp', '.data') : path.join(process.cwd(), '.data');
-const DATA_FILE = path.join(DATA_DIR, 'extension-leads.json');
+const DEFAULT_LIMIT = 200;
+const MAX_LIMIT = 1000;
+const MAX_CUSTOM_STEPS = 20;
 
-function getStoredLeads(): any[] {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify([]), 'utf-8');
-      return [];
-    }
-    const content = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(content) || [];
-  } catch (err) {
-    console.error('Error reading extension leads file:', err);
-    return [];
-  }
-}
+const CONNECTION_STATUSES = [
+  'not_started', 'pending', 'request_pending', 'request_sent', 'connected', 'declined', 'verified', 'not_connected',
+];
+const OUTREACH_STATUSES = [
+  'unassigned', 'in_sequence', 'approval_pending', 'pending_sequence_approval', 'needs_sequence',
+  'message_sent', 'followup_due', 'replied', 'completed', 'paused', 'stopped',
+];
 
-function saveStoredLeads(leads: any[]): void {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(leads, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving extension leads file:', err);
-  }
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: corsHeaders });
 }
 
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
+  return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
-
-// In-memory server cache to minimize Firestore reads across concurrent users/components
-interface CachedLeadsResult {
-  leads: any[];
-  count: number;
-  cachedAt: number;
-}
-const leadsServerCache = new Map<string, CachedLeadsResult>();
-const LEADS_SERVER_CACHE_TTL_MS = 45 * 1000; // 45 seconds TTL
 
 export async function GET(req: NextRequest) {
   try {
-    const workspaceIdParam =
-      req.headers.get('x-workspace-id') ||
-      req.nextUrl.searchParams.get('workspaceId');
-    const limitParam = req.nextUrl.searchParams.get('limit');
-    const parsedLimit = limitParam ? parseInt(limitParam, 10) : 0;
-    const filterParam = req.nextUrl.searchParams.get('filter');
-    const dueTodayParam = req.nextUrl.searchParams.get('dueToday');
-    const isDueToday = dueTodayParam === 'true' || filterParam === 'today';
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, role, workspaceId } = auth.context;
 
-    const cacheKey = `${workspaceIdParam || 'all'}_limit_${parsedLimit || 'all'}_due_${isDueToday ? '1' : '0'}`;
-    const cached = leadsServerCache.get(cacheKey);
-    const nowTs = Date.now();
+    const parsedLimit = parseInt(req.nextUrl.searchParams.get('limit') || '', 10);
+    const limit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_LIMIT, MAX_LIMIT);
+    const isDueToday =
+      req.nextUrl.searchParams.get('dueToday') === 'true' || req.nextUrl.searchParams.get('filter') === 'today';
 
-    if (cached && nowTs - cached.cachedAt < LEADS_SERVER_CACHE_TTL_MS) {
-      return NextResponse.json(
-        {
-          success: true,
-          count: cached.count,
-          leads: cached.leads,
-          fromCache: true,
-        },
-        { status: 200, headers: corsHeaders }
-      );
+    // Tenant and ownership scoping happens in the query itself: admins see the workspace,
+    // everyone else only the leads assigned to them.
+    let q: Query<DocumentData> = adminDb.collection('leads').where('workspaceId', '==', workspaceId);
+    if (role !== 'admin') {
+      q = q.where('assignedToId', '==', uid);
     }
+    const snap = await q.limit(limit).get();
 
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    let firestoreLeads: any[] = [];
-    let authContext: any = null;
-    try {
-      authContext = await authenticateServerRequest(req);
-    } catch (authErr) {
-      console.warn('[API /leads GET] Auth check warning:', authErr);
-    }
-
-    const resolvedWorkspaceId = workspaceIdParam || authContext?.workspaceId || null;
-
-    if (isAdminReady && adminDb) {
-      try {
-        let q: any = adminDb.collection('leads');
-        if (resolvedWorkspaceId) {
-          q = q.where('workspaceId', '==', resolvedWorkspaceId);
-        }
-        if (parsedLimit > 0) {
-          q = q.limit(parsedLimit);
-        }
-        const snap = await q.get();
-        if (!snap.empty) {
-          firestoreLeads = snap.docs.map((d: any) => ({
-            id: d.id,
-            ...d.data(),
-          }));
-        }
-      } catch (fsErr) {
-        console.warn('[API /leads GET] Firestore read fallback:', fsErr);
-      }
-    }
-
-    const storedLeads = getStoredLeads();
-    // Merge: prefer Firestore leads, supplement with stored extension leads
-    // Deduplicate by normalized linkedinUrl so same prospect never exists as separate docs
-    const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
-    const leadMap = new Map<string, any>();
-    const urlToIdMap = new Map<string, string>();
-
-    const mergeLeadIntoMap = (l: any) => {
-      const u = normUrl(l.linkedinUrl);
-      if (u && urlToIdMap.has(u)) {
-        const primaryId = urlToIdMap.get(u)!;
-        const existing = leadMap.get(primaryId);
-        if (existing) {
-          leadMap.set(primaryId, {
-            ...existing,
-            ...l,
-            id: primaryId,
-            connectionNote: l.connectionNote || existing.connectionNote || null,
-            notes: l.notes || existing.notes || null,
-            company: l.company || existing.company,
-            jobTitle: l.jobTitle || existing.jobTitle,
-            outreachStatus: (l.outreachStatus === 'needs_sequence' || l.outreachStatus === 'in_sequence') ? l.outreachStatus : existing.outreachStatus,
-            connectionStatus: (l.connectionStatus === 'request_sent' || l.connectionStatus === 'connected') ? l.connectionStatus : existing.connectionStatus,
-          });
-          return;
-        }
-      }
-
-      if (leadMap.has(l.id)) {
-        const existing = leadMap.get(l.id);
-        leadMap.set(l.id, {
-          ...existing,
-          ...l,
-          connectionNote: l.connectionNote || existing.connectionNote || null,
-          notes: l.notes || existing.notes || null,
-        });
-      } else {
-        leadMap.set(l.id, l);
-        if (u) {
-          urlToIdMap.set(u, l.id);
-        }
-      }
-    };
-
-    storedLeads.forEach(mergeLeadIntoMap);
-    firestoreLeads.forEach(mergeLeadIntoMap);
-    const merged = Array.from(leadMap.values());
-
-    // Role-based Access Control & Strict Workspace Scoping:
-    // Normalize representative fields on all leads before caching & response
-    const finalLeads = merged.map((l: any) => {
-      const assignedId = l.assignedToId || l.capturedByUid || null;
+    let leads: Record<string, any>[] = snap.docs.map((d) => {
+      const l = { id: d.id, ...d.data() } as Record<string, any>;
       const assignedEmail = l.assignedToEmail || l.capturedBy || null;
-      const assignedName = l.assignedToName || (assignedEmail ? assignedEmail.split('@')[0] : 'Unassigned');
-      const normalizedOutreach = (!l.sequenceId && l.outreachStatus === 'in_sequence')
-        ? 'unassigned'
-        : (l.outreachStatus || (l.sequenceId ? 'in_sequence' : 'unassigned'));
       return {
         ...l,
-        assignedToId: assignedId,
+        assignedToId: l.assignedToId || l.capturedByUid || null,
         assignedToEmail: assignedEmail,
-        assignedToName: assignedName,
-        outreachStatus: normalizedOutreach,
+        assignedToName: l.assignedToName || (assignedEmail ? String(assignedEmail).split('@')[0] : 'Unassigned'),
+        outreachStatus:
+          !l.sequenceId && l.outreachStatus === 'in_sequence'
+            ? 'unassigned'
+            : l.outreachStatus || (l.sequenceId ? 'in_sequence' : 'unassigned'),
       };
     });
 
-    // 1. Leads must match the active workspace (if resolved)
-    let finalLeadsFiltered = resolvedWorkspaceId
-      ? finalLeads.filter((l: any) => l.workspaceId === resolvedWorkspaceId)
-      : finalLeads;
-
-    // Filter to only today's outreach cadence leads if requested
     if (isDueToday) {
       const todayStr = new Date().toISOString().split('T')[0];
-      finalLeadsFiltered = finalLeadsFiltered.filter((l: any) => {
+      leads = leads.filter((l) => {
         if (l.disposition === 'archived') return false;
-        const isNeedsSeq = l.outreachStatus === 'needs_sequence';
-        const isFollowup = l.outreachStatus === 'followup_due';
-        const isInSeq = l.outreachStatus === 'in_sequence';
-        const isDueTodayOrOverdue = Boolean(l.nextFollowUpDate && l.nextFollowUpDate <= todayStr);
-        return isNeedsSeq || isFollowup || isInSeq || isDueTodayOrOverdue;
+        return (
+          l.outreachStatus === 'needs_sequence' ||
+          l.outreachStatus === 'followup_due' ||
+          l.outreachStatus === 'in_sequence' ||
+          Boolean(l.nextFollowUpDate && l.nextFollowUpDate <= todayStr)
+        );
       });
     }
 
-    if (authContext) {
-      if (authContext.role !== 'admin') {
-        const userUid = authContext.uid;
-        const userEmail = (authContext.email || '').toLowerCase().trim();
-        finalLeadsFiltered = finalLeadsFiltered.filter((l: any) => {
-          const assignedEmail = (l.assignedToEmail || '').toLowerCase().trim();
-          const capturedEmail = (l.capturedBy || '').toLowerCase().trim();
-          return (
-            (l.assignedToId && l.assignedToId === userUid) ||
-            (l.capturedByUid && l.capturedByUid === userUid) ||
-            (assignedEmail && assignedEmail === userEmail) ||
-            (capturedEmail && capturedEmail === userEmail)
-          );
-        });
-      }
-    }
-
-    leadsServerCache.set(cacheKey, {
-      leads: finalLeadsFiltered,
-      count: finalLeadsFiltered.length,
-      cachedAt: Date.now(),
-    });
-
-    return NextResponse.json(
-      {
-        success: true,
-        count: finalLeadsFiltered.length,
-        leads: finalLeadsFiltered,
-      },
-      {
-        status: 200,
-        headers: corsHeaders,
-      }
-    );
-  } catch (err: any) {
+    return json({ success: true, count: leads.length, leads });
+  } catch (err) {
     console.error('[API /leads GET] Error:', err);
-    return NextResponse.json(
-      { error: err?.message || 'Failed to fetch leads' },
-      { status: 500, headers: corsHeaders }
-    );
+    return json({ error: 'Failed to fetch leads' }, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    leadsServerCache.clear(); // Invalidate cache immediately on new lead creation/update
-    let token = '';
-    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      const tokenCookie = req.cookies.get('leadflow_auth_token');
-      if (tokenCookie) {
-        token = tokenCookie.value;
-      }
-    }
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, email, role, workspaceId } = auth.context;
+    const isAdmin = role === 'admin';
 
     const body = await req.json();
-
-    if (!body.firstName || !body.company) {
-      return NextResponse.json(
-        { error: 'First name and company name are required.' },
-        { status: 400, headers: corsHeaders }
-      );
+    const firstName = str(body.firstName, 200);
+    const company = str(body.company, 200);
+    if (!firstName || !company) {
+      return json({ error: 'First name and company name are required.' }, 400);
     }
 
-    let capturedBy = body.capturedBy || 'extension_user';
-    let capturedByUid = body.capturedByUid || null;
-    let resolvedWorkspaceId =
-      req.headers.get('x-workspace-id') ||
-      body.workspaceId ||
-      null;
+    let linkedinUrl = '';
+    if (body.linkedinUrl) {
+      const normalized = normalizeLinkedinUrl(body.linkedinUrl);
+      if (!normalized) return json({ error: 'linkedinUrl must be a valid https://linkedin.com URL.' }, 400);
+      linkedinUrl = normalized;
+    }
+    const emailValue = str(body.email, 254);
+    if (emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) {
+      return json({ error: 'Invalid email address.' }, 400);
+    }
 
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
+    // Assignee: admins may assign to any active member; everyone else owns what they create.
+    let assignee = { uid, name: str(auth.context.profile?.name, 200) || email.split('@')[0], email };
+    if (isAdmin && body.assignedToId && body.assignedToId !== uid) {
+      const resolved = await resolveAssignee(workspaceId, String(body.assignedToId));
+      if (!resolved) return json({ error: 'assignedToId is not an active member of this workspace.' }, 400);
+      assignee = resolved;
+    }
 
-    if (isAdminReady && token) {
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        if (decoded?.email) {
-          capturedBy = decoded.email;
-          capturedByUid = decoded.uid;
-        }
-        if (!resolvedWorkspaceId && decoded?.uid) {
-          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists) {
-            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId || null;
-          }
-          if (!resolvedWorkspaceId) {
-            const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
-            if (!ownedWsSnap.empty) {
-              resolvedWorkspaceId = ownedWsSnap.docs[0].id;
-            }
-          }
-        }
-      } catch {
-        // Fallback to body properties
+    // Duplicate detection is strictly inside the caller's workspace.
+    let existingId: string | null = null;
+    let existing: Record<string, any> | null = null;
+
+    if (typeof body.id === 'string' && body.id) {
+      const snap = await adminDb.collection('leads').doc(body.id).get();
+      if (snap.exists && snap.data()?.workspaceId === workspaceId) {
+        existingId = snap.id;
+        existing = snap.data() as Record<string, any>;
       }
+    }
+    if (!existingId && linkedinUrl) {
+      const raw = str(body.linkedinUrl, 500);
+      const candidates = Array.from(new Set([linkedinUrl, raw].filter(Boolean)));
+      const dup = await adminDb
+        .collection('leads')
+        .where('workspaceId', '==', workspaceId)
+        .where('linkedinUrl', 'in', candidates)
+        .limit(1)
+        .get();
+      if (!dup.empty) {
+        existingId = dup.docs[0].id;
+        existing = dup.docs[0].data() as Record<string, any>;
+      }
+    }
+    if (existing && !canAccessLead(existing, { uid, role, workspaceId })) {
+      return json({ error: 'A lead with this LinkedIn profile already exists in the workspace.' }, 409);
     }
 
     const now = new Date().toISOString();
-    const isConnSent = body.isConnectionSent || body.connectionStatus === 'request_sent' || Boolean(body.connectionNote);
-    const resolvedConnStatus = isConnSent ? 'request_sent' : (body.connectionStatus || 'not_started');
-    const resolvedOutreachStatus = (!body.sequenceId && body.outreachStatus === 'in_sequence')
-      ? 'unassigned'
-      : (body.outreachStatus || (body.sequenceId ? 'in_sequence' : 'unassigned'));
-    const resolvedStepNumber = (isConnSent && body.sequenceId) ? 2 : (body.currentStepNumber || (body.sequenceId ? 1 : 0));
-    const defaultFollowUp = (isConnSent && body.sequenceId)
-      ? new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0]
-      : null;
+    const isCustomSeq = body.sequenceMode === 'custom' || body.outreachStatus === 'pending_sequence_approval';
+    const leadId = existingId || `lead_${randomUUID()}`;
+    const customSeqId = `seq_custom_${leadId}`;
+
+    // A referenced (non-custom) sequence must exist in this workspace and be approved.
+    let sequenceId: string | null = isCustomSeq ? customSeqId : (body.sequenceId ? String(body.sequenceId) : existing?.sequenceId || null);
+    let sequenceName: string | null = existing?.sequenceName || null;
+    if (!isCustomSeq && body.sequenceId) {
+      const seqSnap = await adminDb.collection('sequences').doc(String(body.sequenceId)).get();
+      const seq = seqSnap.data();
+      if (!seqSnap.exists || !seq || seq.workspaceId !== workspaceId) {
+        return json({ error: 'Unknown sequence.' }, 400);
+      }
+      if (!isAdmin && seq.approvalStatus !== 'approved' && seq.createdByUid !== uid) {
+        return json({ error: 'Sequence is not approved.' }, 403);
+      }
+      sequenceId = seqSnap.id;
+      sequenceName = seq.name || null;
+    }
+
+    const connectionNote = str(body.connectionNote, 1000) || existing?.connectionNote || null;
+    const isConnSent = Boolean(body.isConnectionSent) || body.connectionStatus === 'request_sent' || Boolean(connectionNote);
+    const requestedConn = CONNECTION_STATUSES.includes(body.connectionStatus) ? body.connectionStatus : null;
+    const connectionStatus = isConnSent ? 'request_sent' : requestedConn || existing?.connectionStatus || 'not_started';
+    const requestedOutreach = OUTREACH_STATUSES.includes(body.outreachStatus) ? body.outreachStatus : null;
+    const outreachStatus =
+      !sequenceId && requestedOutreach === 'in_sequence'
+        ? 'unassigned'
+        : requestedOutreach || existing?.outreachStatus || (sequenceId ? 'in_sequence' : 'unassigned');
+    const currentStepNumber =
+      isConnSent && sequenceId ? 2 : Number.isInteger(body.currentStepNumber) && body.currentStepNumber >= 0
+        ? Math.min(body.currentStepNumber, MAX_CUSTOM_STEPS + 1)
+        : existing?.currentStepNumber ?? (sequenceId ? 1 : 0);
+    const defaultFollowUp =
+      isConnSent && sequenceId ? new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0] : null;
 
     let defaultActionTitle: string | null = null;
-    if (resolvedOutreachStatus === 'needs_sequence') {
-      defaultActionTitle = 'Draft Follow-up Cadence';
-    } else if (resolvedOutreachStatus === 'pending_sequence_approval') {
-      defaultActionTitle = 'Awaiting Admin Approval';
-    } else if (isConnSent) {
-      defaultActionTitle = 'Step 2: Follow-up 1';
-    }
+    if (outreachStatus === 'needs_sequence') defaultActionTitle = 'Draft Follow-up Cadence';
+    else if (outreachStatus === 'pending_sequence_approval') defaultActionTitle = 'Awaiting Admin Approval';
+    else if (isConnSent) defaultActionTitle = 'Step 2: Follow-up 1';
 
-    const normUrl = (u: string) => (u || '').trim().toLowerCase().replace(/\/+$/, '');
-    const incomingNormUrl = normUrl(body.linkedinUrl);
-
-    // Look up existing lead in Firestore or local store to avoid duplicate documents
-    let existingDocId: string | null = body.id || null;
-    let existingDocData: any = null;
-
-    if (isAdminReady && adminDb) {
-      try {
-        if (existingDocId) {
-          const docSnap = await adminDb.collection('leads').doc(existingDocId).get();
-          if (docSnap.exists) {
-            existingDocData = docSnap.data();
-          } else {
-            existingDocId = null;
-          }
-        }
-
-        // 1. First check in-memory cache and local stored leads (0 Firestore reads!)
-        const memoryLeads = leadsServerCache.get(resolvedWorkspaceId || 'all')?.leads || getStoredLeads();
-        if (!existingDocId && incomingNormUrl) {
-          const match = memoryLeads.find((l: any) => l.linkedinUrl && normUrl(l.linkedinUrl) === incomingNormUrl);
-          if (match) {
-            existingDocId = match.id;
-            existingDocData = match;
-          }
-        }
-
-        if (!existingDocId && body.firstName && body.lastName) {
-          const fLower = body.firstName.trim().toLowerCase();
-          const lLower = (body.lastName || '').trim().toLowerCase();
-          const match = memoryLeads.find(
-            (l: any) =>
-              (l.firstName || '').trim().toLowerCase() === fLower &&
-              (l.lastName || '').trim().toLowerCase() === lLower
-          );
-          if (match) {
-            existingDocId = match.id;
-            existingDocData = match;
-          }
-        }
-
-        // 2. If not found in memory, do a targeted indexed lookup (limit 1) instead of scanning entire collection
-        if (!existingDocId && incomingNormUrl && body.linkedinUrl) {
-          let q: any = adminDb.collection('leads');
-          if (resolvedWorkspaceId) {
-            q = q.where('workspaceId', '==', resolvedWorkspaceId);
-          }
-          q = q.where('linkedinUrl', '==', body.linkedinUrl).limit(1);
-          const snap = await q.get();
-          if (!snap.empty) {
-            existingDocId = snap.docs[0].id;
-            existingDocData = snap.docs[0].data();
-          }
-        }
-      } catch (findErr) {
-        console.warn('[API /leads POST] Existing lead lookup failed:', findErr);
-      }
-    }
-
-    const targetLeadId = existingDocId || `lead_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const resolvedConnNote = body.connectionNote || existingDocData?.connectionNote || null;
-
+    const lastName = str(body.lastName, 200) || existing?.lastName || '';
     const newLead = {
-      ...(existingDocData || {}),
-      id: targetLeadId,
-      firstName: body.firstName.trim(),
-      lastName: (body.lastName || existingDocData?.lastName || '').trim(),
-      company: body.company.trim() || existingDocData?.company,
-      jobTitle: (body.jobTitle || existingDocData?.jobTitle || 'Prospect').trim(),
-      email: body.email ? body.email.trim() : (existingDocData?.email || null),
-      phone: body.phone ? body.phone.trim() : (existingDocData?.phone || null),
-      linkedinUrl: body.linkedinUrl || existingDocData?.linkedinUrl || '',
+      ...(existing || {}),
+      id: leadId,
+      firstName,
+      lastName,
+      company,
+      jobTitle: str(body.jobTitle, 200) || existing?.jobTitle || 'Prospect',
+      email: emailValue || existing?.email || null,
+      phone: str(body.phone, 50) || existing?.phone || null,
+      linkedinUrl: linkedinUrl || existing?.linkedinUrl || '',
       channel: 'linkedin' as const,
-      sequenceId: body.sequenceId || existingDocData?.sequenceId || null,
-      sequenceName: body.sequenceName || existingDocData?.sequenceName || (body.sequenceId ? 'LinkedIn 4-Step Outbound' : null),
-      sequenceMode: body.sequenceMode || existingDocData?.sequenceMode || (body.sequenceId ? 'approved' : null),
-      connectionNote: resolvedConnNote,
-      customSteps: body.customSteps || existingDocData?.customSteps || null,
-      currentStepNumber: resolvedStepNumber,
-      totalSteps: body.totalSteps || existingDocData?.totalSteps || 4,
-      connectionStatus: resolvedConnStatus,
-      outreachStatus: resolvedOutreachStatus,
-      disposition: body.disposition || existingDocData?.disposition || 'active',
-      notes: body.notes || (resolvedConnNote ? `Connection note: ${resolvedConnNote}` : (existingDocData?.notes || 'Added to LeadFlow pipeline')),
-      capturedBy: capturedBy || existingDocData?.capturedBy,
-      capturedByUid: capturedByUid || body.assignedToId || existingDocData?.capturedByUid,
-      assignedToId: body.assignedToId || existingDocData?.assignedToId || capturedByUid || null,
-      assignedToName: body.assignedToName || existingDocData?.assignedToName || (capturedBy ? capturedBy.split('@')[0] : 'Outbound SDR'),
-      assignedToEmail: body.assignedToEmail || existingDocData?.assignedToEmail || capturedBy || null,
-      workspaceId: resolvedWorkspaceId || existingDocData?.workspaceId || 'default_workspace',
-      nextFollowUpDate: body.nextFollowUpDate || existingDocData?.nextFollowUpDate || defaultFollowUp,
-      nextActionTitle: body.nextActionTitle || defaultActionTitle,
-      createdAt: existingDocData?.createdAt || body.createdAt || now,
+      sequenceId,
+      sequenceName: isCustomSeq ? `Custom Cadence: ${firstName} ${lastName}`.trim() : sequenceName,
+      sequenceMode: isCustomSeq ? 'custom' : existing?.sequenceMode || (sequenceId ? 'approved' : null),
+      connectionNote,
+      currentStepNumber,
+      totalSteps: Number.isInteger(body.totalSteps) && body.totalSteps > 0 ? Math.min(body.totalSteps, 50) : existing?.totalSteps || 4,
+      connectionStatus,
+      outreachStatus,
+      disposition: str(body.disposition, 50) || existing?.disposition || 'active',
+      notes: str(body.notes, 5000) || (connectionNote ? `Connection note: ${connectionNote}` : existing?.notes || 'Added to LeadFlow pipeline'),
+      capturedBy: existing?.capturedBy || email,
+      capturedByUid: existing?.capturedByUid || uid,
+      assignedToId: existing?.assignedToId || assignee.uid,
+      assignedToName: existing?.assignedToName || assignee.name,
+      assignedToEmail: existing?.assignedToEmail || assignee.email,
+      workspaceId,
+      nextFollowUpDate: str(body.nextFollowUpDate, 10) || existing?.nextFollowUpDate || defaultFollowUp,
+      nextActionTitle: str(body.nextActionTitle, 200) || defaultActionTitle,
+      createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
-
-    // 1. Save to Firestore 'leads' collection
-    if (isAdminReady && adminDb) {
-      try {
-        // If custom sequence was supplied from extension, create it in sequences collection
-        if (body.sequenceMode === 'custom' || body.outreachStatus === 'pending_sequence_approval') {
-          const customSeqId = newLead.sequenceId || `seq_custom_${newLead.id}`;
-          const noteText =
-            body.connectionNote ||
-            newLead.connectionNote ||
-            body.notes?.match(/connection note:\s*(.+)/i)?.[1]?.trim() ||
-            body.notes?.match(/connection sent with note:\s*"?([^"]+)"?/i)?.[1]?.trim() ||
-            '';
-
-          let steps: any[] = [];
-          if (Array.isArray(body.customSteps) && body.customSteps.length > 0) {
-            const hasStep1 = body.customSteps.some((s: any) => s.stepNumber === 1 || s.actionType === 'connection_request');
-            if (hasStep1) {
-              steps = body.customSteps.map((s: any) => {
-                if (s.stepNumber === 1 || s.actionType === 'connection_request') {
-                  return {
-                    stepNumber: 1,
-                    actionType: 'connection_request',
-                    title: s.title || 'Connection Request',
-                    delayDays: 0,
-                    messageTemplate: s.messageTemplate || noteText,
-                    enabled: true,
-                  };
-                }
-                return {
-                  stepNumber: s.stepNumber,
-                  actionType: s.actionType || 'send_message',
-                  title: s.title || `Follow-up ${s.stepNumber - 1}`,
-                  delayDays: s.delayDays || 3,
-                  messageTemplate: s.messageTemplate || '',
-                  enabled: true,
-                };
-              });
-            } else {
-              steps = [
-                {
-                  stepNumber: 1,
-                  actionType: 'connection_request',
-                  title: 'Connection Request',
-                  delayDays: 0,
-                  messageTemplate: noteText,
-                  enabled: true,
-                },
-                ...body.customSteps.map((s: any, idx: number) => ({
-                  stepNumber: s.stepNumber || idx + 2,
-                  actionType: s.actionType || 'send_message',
-                  title: s.title || `Follow-up ${idx + 1}`,
-                  delayDays: s.delayDays || (idx === 0 ? 3 : 7),
-                  messageTemplate: s.messageTemplate || '',
-                  enabled: true,
-                }))
-              ];
-            }
-          } else {
-            steps = [
-              {
-                stepNumber: 1,
-                actionType: 'connection_request',
-                title: 'Connection Request',
-                delayDays: 0,
-                messageTemplate: noteText,
-                enabled: true,
-              },
-              {
-                stepNumber: 2,
-                actionType: 'send_message',
-                title: 'First Follow-up',
-                delayDays: 3,
-                messageTemplate: `Hi ${newLead.firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${newLead.company}.`,
-                enabled: true,
-              }
-            ];
-          }
-
-          const customSeq = {
-            id: customSeqId,
-            name: `Custom Cadence: ${newLead.firstName} ${newLead.lastName}`,
-            channel: 'linkedin',
-            description: `Bespoke 1:1 cadence created by ${capturedBy} for ${newLead.firstName} ${newLead.lastName} at ${newLead.company}`,
-            steps,
-            status: 'pending_approval',
-            approvalStatus: 'pending',
-            workspaceId: newLead.workspaceId,
-            createdBy: capturedBy,
-            createdByUid: capturedByUid,
-            createdByRole: 'sdr',
-            targetRole: 'sdr',
-            isCustom: true,
-            targetLeadId: newLead.id,
-            targetLeadName: `${newLead.firstName} ${newLead.lastName}`,
-            targetLeadCompany: newLead.company,
-            targetLeadLinkedin: newLead.linkedinUrl,
-            createdAt: now,
-            updatedAt: now,
-          };
-          await adminDb.collection('sequences').doc(customSeqId).set(customSeq, { merge: true });
-          newLead.sequenceId = customSeqId;
-          newLead.sequenceName = customSeq.name;
-        }
-
-        await adminDb.collection('leads').doc(newLead.id).set(newLead, { merge: true });
-
-        // If connection note was sent, log an activity event
-        if (newLead.connectionNote) {
-          const actId = `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-          await adminDb.collection('activities').doc(actId).set({
-            id: actId,
-            leadId: newLead.id,
-            leadName: `${newLead.firstName} ${newLead.lastName}`,
-            type: 'linkedin_connect',
-            title: 'LinkedIn Connection Note Sent',
-            description: newLead.connectionNote,
-            actorName: newLead.assignedToName || capturedBy,
-            timestamp: now,
-            workspaceId: newLead.workspaceId,
-          }, { merge: true });
-        }
-
-        // If SDR chose "Note sent only; draft follow-up cadence later on portal", create pending task
-        if (resolvedOutreachStatus === 'needs_sequence') {
-          const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-          await adminDb.collection('tasks').doc(taskId).set({
-            id: taskId,
-            title: `Draft Follow-up Cadence for ${newLead.firstName} ${newLead.lastName}`,
-            leadId: newLead.id,
-            leadName: `${newLead.firstName} ${newLead.lastName}`,
-            leadCompany: newLead.company,
-            leadLinkedin: newLead.linkedinUrl,
-            type: 'manual_review',
-            dueDate: new Date().toISOString().split('T')[0],
-            assignedToId: newLead.assignedToId || 'sdr_current',
-            assignedToName: newLead.assignedToName || 'Outbound SDR',
-            priority: 'high',
-            status: 'pending',
-            notes: newLead.connectionNote ? `Connection sent with note: "${newLead.connectionNote}"` : 'Connection request sent on LinkedIn. Needs follow-up sequence.',
-            workspaceId: newLead.workspaceId,
-            createdAt: now,
-            updatedAt: now,
-          }, { merge: true });
-        }
-      } catch (fsErr) {
-        console.warn('[API /leads POST] Firestore lead write warning:', fsErr);
-      }
+    // Admins may reassign an existing lead explicitly.
+    if (existing && isAdmin && body.assignedToId && body.assignedToId !== existing.assignedToId) {
+      const resolved = await resolveAssignee(workspaceId, String(body.assignedToId));
+      if (!resolved) return json({ error: 'assignedToId is not an active member of this workspace.' }, 400);
+      newLead.assignedToId = resolved.uid;
+      newLead.assignedToName = resolved.name;
+      newLead.assignedToEmail = resolved.email;
     }
 
-    // 2. Also save to local file for offline / development fallback
-    const currentLeads = getStoredLeads();
-    const existingIndex = currentLeads.findIndex(
-      (l) => l.id === newLead.id || (incomingNormUrl && normUrl(l.linkedinUrl) === incomingNormUrl)
-    );
+    const batch = adminDb.batch();
 
-    if (existingIndex >= 0) {
-      currentLeads[existingIndex] = {
-        ...currentLeads[existingIndex],
-        ...newLead,
-        id: currentLeads[existingIndex].id,
-        connectionNote: newLead.connectionNote || currentLeads[existingIndex].connectionNote || null,
-        notes: newLead.notes || currentLeads[existingIndex].notes || null,
+    if (isCustomSeq) {
+      const existingSeq = await adminDb.collection('sequences').doc(customSeqId).get();
+      if (existingSeq.exists && existingSeq.data()?.workspaceId !== workspaceId) {
+        return json({ error: 'Sequence id conflict.' }, 409);
+      }
+      const noteText = connectionNote || '';
+      const rawSteps: any[] = Array.isArray(body.customSteps) ? body.customSteps.slice(0, MAX_CUSTOM_STEPS) : [];
+      const steps: any[] = [
+        { stepNumber: 1, actionType: 'connection_request', title: 'Connection Request', delayDays: 0, messageTemplate: noteText, enabled: true },
+      ];
+      const followUps = rawSteps.filter((s) => s && !(s.stepNumber === 1 || s.actionType === 'connection_request'));
+      if (followUps.length === 0) {
+        steps.push({
+          stepNumber: 2,
+          actionType: 'send_message',
+          title: 'First Follow-up',
+          delayDays: 3,
+          messageTemplate: `Hi ${firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${company}.`,
+          enabled: true,
+        });
+      } else {
+        followUps.forEach((s, idx) => {
+          steps.push({
+            stepNumber: idx + 2,
+            actionType: str(s.actionType, 40) || 'send_message',
+            title: str(s.title, 200) || `Follow-up ${idx + 1}`,
+            delayDays: Number.isFinite(s.delayDays) && s.delayDays >= 0 ? Math.min(s.delayDays, 365) : idx === 0 ? 3 : 7,
+            messageTemplate: str(s.messageTemplate, 3000),
+            enabled: true,
+          });
+        });
+      }
+      const leadName = `${firstName} ${lastName}`.trim();
+      batch.set(
+        adminDb.collection('sequences').doc(customSeqId),
+        {
+          id: customSeqId,
+          name: `Custom Cadence: ${leadName}`,
+          channel: 'linkedin',
+          description: `Bespoke 1:1 cadence created by ${email} for ${leadName} at ${company}`,
+          steps,
+          status: 'pending_approval',
+          approvalStatus: 'pending',
+          workspaceId,
+          createdBy: email,
+          createdByUid: uid,
+          createdByRole: role,
+          targetRole: 'sdr',
+          isCustom: true,
+          targetLeadId: leadId,
+          targetLeadName: leadName,
+          targetLeadCompany: company,
+          targetLeadLinkedin: newLead.linkedinUrl,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+      newLead.sequenceId = customSeqId;
+    }
+
+    batch.set(adminDb.collection('leads').doc(leadId), cleanObject(newLead), { merge: true });
+
+    if (connectionNote) {
+      const actId = `act_${randomUUID()}`;
+      batch.set(adminDb.collection('activities').doc(actId), {
+        id: actId,
+        leadId,
+        leadName: `${firstName} ${lastName}`.trim(),
+        type: 'linkedin_connect',
+        title: 'LinkedIn Connection Note Sent',
+        description: connectionNote,
+        actorName: newLead.assignedToName || email,
+        timestamp: now,
+        workspaceId,
+      });
+    }
+
+    if (outreachStatus === 'needs_sequence') {
+      const taskId = `task_${randomUUID()}`;
+      batch.set(adminDb.collection('tasks').doc(taskId), {
+        id: taskId,
+        title: `Draft Follow-up Cadence for ${firstName} ${lastName}`.trim(),
+        leadId,
+        leadName: `${firstName} ${lastName}`.trim(),
+        leadCompany: company,
+        leadLinkedin: newLead.linkedinUrl,
+        type: 'manual_review',
+        dueDate: now.split('T')[0],
+        assignedToId: newLead.assignedToId,
+        assignedToName: newLead.assignedToName,
+        priority: 'high',
+        status: 'pending',
+        notes: connectionNote
+          ? `Connection sent with note: "${connectionNote}"`
+          : 'Connection request sent on LinkedIn. Needs follow-up sequence.',
+        workspaceId,
+        createdAt: now,
         updatedAt: now,
-      };
-    } else {
-      currentLeads.unshift(newLead);
+      });
     }
-    saveStoredLeads(currentLeads);
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Lead saved to Firestore and pipeline store',
-        lead: newLead,
-      },
-      {
-        status: 201,
-        headers: corsHeaders,
-      }
-    );
-  } catch (error: any) {
-    console.error('API /leads POST Error:', error);
-    return NextResponse.json(
-      { error: error?.message || 'Failed to process lead' },
-      { status: 500, headers: corsHeaders }
-    );
+    await batch.commit();
+
+    return json({ success: true, message: 'Lead saved', lead: newLead }, existing ? 200 : 201);
+  } catch (error) {
+    console.error('[API /leads POST] Error:', error);
+    return json({ error: 'Failed to process lead' }, 500);
   }
 }
 
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, role, workspaceId } = auth.context;
+    const isAdmin = role === 'admin';
     const now = new Date().toISOString();
 
-    // 1. Batch updates if body.leads array is provided
-    if (Array.isArray(body?.leads) && body.leads.length > 0) {
-      const itemsToUpdate = body.leads.filter((item: any) => item && item.id);
+    const body = await req.json();
+    const items: Record<string, any>[] = Array.isArray(body?.leads)
+      ? body.leads.filter((i: any) => i && typeof i.id === 'string' && i.id)
+      : body && typeof body.id === 'string' && body.id
+        ? [body]
+        : [];
 
-      if (isAdminReady && adminDb) {
-        try {
-          const chunkSize = 400;
-          for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
-            const chunk = itemsToUpdate.slice(i, i + chunkSize);
-            const batch = adminDb.batch();
-            for (const item of chunk) {
-              const docRef = adminDb.collection('leads').doc(item.id);
-              batch.set(docRef, { ...item, updatedAt: now }, { merge: true });
-            }
-            await batch.commit();
-          }
-        } catch (fsErr) {
-          console.warn('[API /leads PATCH batch] Firestore update error:', fsErr);
-        }
+    if (items.length === 0) {
+      return json({ error: 'Lead id or leads array is required' }, 400);
+    }
+    if (items.length > MAX_BATCH) {
+      return json({ error: `At most ${MAX_BATCH} leads can be updated per request.` }, 400);
+    }
+
+    const refs = items.map((i) => adminDb.collection('leads').doc(i.id));
+    const snaps = await adminDb.getAll(...refs);
+
+    const batch = adminDb.batch();
+    const updated: Record<string, unknown>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const snap = snaps[i];
+      // Missing, other-workspace and not-yours all look identical to the caller.
+      if (!snap.exists || !canAccessLead(snap.data(), { uid, role, workspaceId })) {
+        return json({ error: `Lead not found: ${items[i].id}` }, 404);
       }
+      const result = sanitizeLeadUpdate(items[i], isAdmin);
+      if ('error' in result) return json({ error: result.error }, 400);
 
-      // Update local storage backup
-      const currentLeads = getStoredLeads();
-      const updatesMap = new Map<string, any>();
-      itemsToUpdate.forEach((item: any) => updatesMap.set(item.id, item));
-
-      const updatedStored = currentLeads.map((lead) => {
-        if (updatesMap.has(lead.id)) {
-          return { ...lead, ...updatesMap.get(lead.id), updatedAt: now };
-        }
-        return lead;
-      });
-      saveStoredLeads(updatedStored);
-
-      return NextResponse.json(
-        { success: true, count: itemsToUpdate.length, message: 'Leads updated in Firestore' },
-        { status: 200, headers: corsHeaders }
-      );
-    }
-
-    // 2. Single lead update
-    if (!body.id) {
-      return NextResponse.json({ error: 'Lead id or leads array is required' }, { status: 400, headers: corsHeaders });
-    }
-
-    const updates = { ...body, updatedAt: now };
-
-    // Update in Firestore
-    if (isAdminReady && adminDb) {
-      try {
-        await adminDb.collection('leads').doc(body.id).set(updates, { merge: true });
-      } catch (e) {
-        console.warn('[API /leads PATCH] Firestore update error:', e);
+      const updates: Record<string, unknown> = { ...result.updates, updatedAt: now };
+      if (isAdmin && 'assignedToId' in updates && updates.assignedToId !== snap.data()?.assignedToId) {
+        const resolved = await resolveAssignee(workspaceId, String(updates.assignedToId));
+        if (!resolved) return json({ error: 'assignedToId is not an active member of this workspace.' }, 400);
+        updates.assignedToId = resolved.uid;
+        updates.assignedToName = resolved.name;
+        updates.assignedToEmail = resolved.email;
       }
+      batch.update(refs[i], updates);
+      updated.push({ id: items[i].id, ...updates });
     }
+    await batch.commit();
 
-    // Update local file
-    const currentLeads = getStoredLeads();
-    const idx = currentLeads.findIndex((l) => l.id === body.id);
-    if (idx >= 0) {
-      currentLeads[idx] = { ...currentLeads[idx], ...updates };
-      saveStoredLeads(currentLeads);
-    }
-
-    return NextResponse.json({ success: true, lead: updates }, { status: 200, headers: corsHeaders });
-  } catch (err: any) {
-    return NextResponse.json({ error: err?.message || 'Update failed' }, { status: 500, headers: corsHeaders });
+    return Array.isArray(body?.leads)
+      ? json({ success: true, count: updated.length })
+      : json({ success: true, lead: updated[0] });
+  } catch (err) {
+    console.error('[API /leads PATCH] Error:', err);
+    return json({ error: 'Update failed' }, 500);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const queryId = searchParams.get('id');
-    const queryIds = searchParams.get('ids');
-    const linkedinUrl = searchParams.get('linkedinUrl');
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, role, workspaceId } = auth.context;
 
-    let bodyIds: string[] = [];
-    let bodyId: string | null = null;
-    let bodyLinkedinUrl: string | null = null;
+    const { searchParams } = new URL(req.url);
+    const ids = new Set<string>();
+    const queryId = searchParams.get('id');
+    if (queryId) ids.add(queryId);
+    searchParams
+      .get('ids')
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((id) => ids.add(id));
 
     try {
       const body = await req.json();
+      if (typeof body?.id === 'string' && body.id) ids.add(body.id);
       if (Array.isArray(body?.ids)) {
-        bodyIds = body.ids;
+        body.ids.forEach((id: unknown) => typeof id === 'string' && id.trim() && ids.add(id.trim()));
       }
-      bodyId = body?.id;
-      bodyLinkedinUrl = body?.linkedinUrl;
     } catch {
       // Body is optional
     }
 
-    const targetIdsSet = new Set<string>();
-    if (queryId) targetIdsSet.add(queryId);
-    if (bodyId) targetIdsSet.add(bodyId);
-    if (queryIds) {
-      queryIds.split(',').map((s) => s.trim()).filter(Boolean).forEach((id) => targetIdsSet.add(id));
+    if (ids.size === 0) {
+      return json({ error: 'Lead id or ids parameter is required' }, 400);
     }
-    bodyIds.forEach((id) => {
-      if (id && typeof id === 'string') targetIdsSet.add(id.trim());
-    });
-
-    const targetIds = Array.from(targetIdsSet);
-    const targetUrl = (linkedinUrl || bodyLinkedinUrl || '').trim().toLowerCase();
-
-    if (targetIds.length === 0 && !targetUrl) {
-      return NextResponse.json(
-        { error: 'Lead id, ids array, or linkedinUrl parameter is required' },
-        { status: 400, headers: corsHeaders }
-      );
+    if (ids.size > MAX_BATCH) {
+      return json({ error: `At most ${MAX_BATCH} leads can be deleted per request.` }, 400);
     }
 
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    // Delete from Firestore in batches
-    if (isAdminReady && adminDb && targetIds.length > 0) {
-      try {
-        const chunkSize = 400;
-        for (let i = 0; i < targetIds.length; i += chunkSize) {
-          const chunk = targetIds.slice(i, i + chunkSize);
-          const batch = adminDb.batch();
-          for (const tid of chunk) {
-            batch.delete(adminDb.collection('leads').doc(tid));
-          }
-          await batch.commit();
-        }
-      } catch (fsErr) {
-        console.warn('[API /leads DELETE] Firestore delete error:', fsErr);
+    const refs = Array.from(ids).map((id) => adminDb.collection('leads').doc(id));
+    const snaps = await adminDb.getAll(...refs);
+    const batch = adminDb.batch();
+    let deletedCount = 0;
+    snaps.forEach((snap, i) => {
+      if (snap.exists && canAccessLead(snap.data(), { uid, role, workspaceId })) {
+        batch.delete(refs[i]);
+        deletedCount++;
       }
-    }
-
-    // Delete matching items from local backup file
-    const currentLeads = getStoredLeads();
-    const idSet = new Set(targetIds);
-    const filtered = currentLeads.filter((l) => {
-      if (idSet.has(l.id) || idSet.has(String(l.id))) return false;
-      if (targetUrl && l.linkedinUrl && l.linkedinUrl.trim().toLowerCase() === targetUrl) return false;
-      return true;
     });
+    if (deletedCount === 0) {
+      return json({ error: 'Lead not found' }, 404);
+    }
+    await batch.commit();
 
-    saveStoredLeads(filtered);
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: `Successfully deleted ${targetIds.length || 1} lead(s) from database`,
-        deletedCount: targetIds.length || 1,
-        remainingCount: filtered.length,
-      },
-      { status: 200, headers: corsHeaders }
-    );
-  } catch (error: any) {
-    console.error('API /leads DELETE Error:', error);
-    return NextResponse.json(
-      { error: error?.message || 'Failed to delete lead' },
-      { status: 500, headers: corsHeaders }
-    );
+    return json({ success: true, message: `Deleted ${deletedCount} lead(s)`, deletedCount });
+  } catch (error) {
+    console.error('[API /leads DELETE] Error:', error);
+    return json({ error: 'Failed to delete lead' }, 500);
   }
 }

@@ -2,8 +2,6 @@ import { authRepository, AuthRepository } from '@/repositories/auth.repository';
 import { AuthUser, UserProfile, UserRole } from '@/types/user';
 import { getFirebaseErrorMessage } from '@/utils/firebaseError';
 import { User as FirebaseUser } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firestore';
 import { Workspace } from '@/types/auth';
 
 export interface MeApiResponse {
@@ -137,8 +135,6 @@ export class AuthService {
         if (res.ok && data.success) {
           workspaceId = data.workspaceId;
           isBackendProvisioned = true;
-        } else if (data.code === 'MISSING_ADMIN_CREDENTIALS') {
-          console.info('[AdminSignup] Firebase Admin Service Account not configured in .env.local; provisioning directly via Firebase Client SDK.');
         } else {
           throw new Error(data.error || 'Failed to provision admin workspace.');
         }
@@ -155,57 +151,8 @@ export class AuthService {
         const credential = await this.repository.loginWithEmail(params.email, params.password, true);
         firebaseUser = credential.user;
       } else {
-        // Fallback: Real Firebase Authentication client creation + real Cloud Firestore records
-        const credential = await this.repository.signUpWithEmail(params.email, params.password);
-        firebaseUser = credential.user;
-
-        const userDisplayName = (params.fullName && params.fullName.trim())
-          ? params.fullName.trim()
-          : params.email.trim().split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-        await this.repository.updateDisplayName(firebaseUser, userDisplayName);
-
-        workspaceId = `ws_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const now = new Date().toISOString();
-        const emailNorm = params.email.trim().toLowerCase();
-
-        // Write user profile to Cloud Firestore
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        await setDoc(userRef, {
-          uid: firebaseUser.uid,
-          name: userDisplayName,
-          email: emailNorm,
-          emailNormalized: emailNorm,
-          status: 'active',
-          role: 'admin',
-          currentWorkspaceId: workspaceId,
-          createdAt: now,
-          updatedAt: now,
-          lastLoginAt: now,
-        }, { merge: true });
-
-        // Write workspace document to Cloud Firestore
-        const wsRef = doc(db, 'workspaces', workspaceId);
-        await setDoc(wsRef, {
-          workspaceId,
-          companyName: params.companyName.trim(),
-          companyLinkedinUrl: params.companyLinkedinUrl.trim(),
-          ownerId: firebaseUser.uid,
-          status: 'active',
-          createdAt: now,
-          updatedAt: now,
-        }, { merge: true });
-
-        // Write workspace membership to Cloud Firestore
-        const memberRef = doc(db, 'workspaces', workspaceId, 'members', firebaseUser.uid);
-        await setDoc(memberRef, {
-          uid: firebaseUser.uid,
-          name: userDisplayName,
-          role: 'admin',
-          status: 'active',
-          joinedAt: now,
-          invitedBy: 'self',
-        }, { merge: true });
+        // Provisioning is server-only: Firestore rules forbid client writes to workspaces and memberships.
+        throw new Error('Workspace provisioning is currently unavailable. Please try again later.');
       }
 
       // 3. Send verification email via Firebase Auth

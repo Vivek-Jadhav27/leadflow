@@ -3,18 +3,15 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { authenticateServerRequest } from '@/lib/serverAuth';
+import { requireWorkspaceAdmin } from '@/lib/serverAuth';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { emailService } from '@/lib/emailService';
 
 export async function POST(req: NextRequest) {
   try {
-    const context = await authenticateServerRequest(req);
-    if (!context || context.role !== 'admin' || !context.workspaceId) {
-      return NextResponse.json({ error: 'Unauthorized: Only workspace Admins can resend invitations.' }, { status: 403 });
-    }
-
-    const { workspaceId, uid } = context;
+    const auth = await requireWorkspaceAdmin(req);
+    if (auth.response) return auth.response;
+    const { workspaceId, uid } = auth.context;
     const body = await req.json();
     const invitationId = body?.invitationId;
 
@@ -35,6 +32,12 @@ export async function POST(req: NextRequest) {
     if (inviteData?.status === 'accepted') {
       return NextResponse.json({ error: 'This invitation has already been accepted.' }, { status: 400 });
     }
+    if (inviteData?.status === 'revoked') {
+      return NextResponse.json(
+        { error: 'This invitation was revoked. Create a new invitation instead.' },
+        { status: 400 }
+      );
+    }
 
     // Workspace info
     const wsDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
@@ -47,10 +50,7 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
 
-    const origin =
-      process.env.NEXT_PUBLIC_APP_URL ||
-      req.headers.get('origin') ||
-      `https://${req.headers.get('host') || 'localhost:3000'}`;
+    const origin = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
 
     const invitationLink = `${origin}/invite/accept?token=${rawToken}`;
 

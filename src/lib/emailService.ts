@@ -73,7 +73,13 @@ class EmailService {
     companyName: string,
     invitationLink: string
   ): Promise<EmailDeliveryResult> {
-    const subject = `You've been invited to join ${companyName} on LeadFlow.`;
+    const subject = `You've been invited to join ${companyName.replace(/[\r\n]+/g, ' ')} on LeadFlow.`;
+    const safeCompany = companyName
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
     const text = `Hi,
 
 You've been invited to join ${companyName} on LeadFlow as an SDR.
@@ -96,7 +102,7 @@ LeadFlow Team`;
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Invitation to join ${companyName} on LeadFlow</title>
+  <title>Invitation to join ${safeCompany} on LeadFlow</title>
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f5f8fa; margin: 0; padding: 24px; color: #33475b;">
   <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #dfe3eb; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
@@ -106,7 +112,7 @@ LeadFlow Team`;
     </div>
 
     <h2 style="font-size: 20px; font-weight: bold; color: #2d3e50; margin-top: 0; margin-bottom: 16px;">
-      Join ${companyName} on LeadFlow
+      Join ${safeCompany} on LeadFlow
     </h2>
 
     <p style="font-size: 14px; line-height: 1.6; color: #516f90; margin-bottom: 16px;">
@@ -114,7 +120,7 @@ LeadFlow Team`;
     </p>
 
     <p style="font-size: 14px; line-height: 1.6; color: #516f90; margin-bottom: 16px;">
-      You've been invited to join <strong>${companyName}</strong> on LeadFlow as an SDR.
+      You've been invited to join <strong>${safeCompany}</strong> on LeadFlow as an SDR.
     </p>
 
     <p style="font-size: 14px; line-height: 1.6; color: #516f90; margin-bottom: 24px;">
