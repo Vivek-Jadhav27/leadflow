@@ -310,42 +310,41 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Try matching by normalized LinkedIn URL across workspace
+        // 1. First check in-memory cache and local stored leads (0 Firestore reads!)
+        const memoryLeads = leadsServerCache.get(resolvedWorkspaceId || 'all')?.leads || getStoredLeads();
         if (!existingDocId && incomingNormUrl) {
-          let q: any = adminDb.collection('leads');
-          if (resolvedWorkspaceId) {
-            q = q.where('workspaceId', '==', resolvedWorkspaceId);
-          }
-          const snap = await q.get();
-          for (const doc of snap.docs) {
-            const d = doc.data();
-            if (d.linkedinUrl && normUrl(d.linkedinUrl) === incomingNormUrl) {
-              existingDocId = doc.id;
-              existingDocData = d;
-              break;
-            }
+          const match = memoryLeads.find((l: any) => l.linkedinUrl && normUrl(l.linkedinUrl) === incomingNormUrl);
+          if (match) {
+            existingDocId = match.id;
+            existingDocData = match;
           }
         }
 
-        // Fallback match by First and Last Name within workspace
         if (!existingDocId && body.firstName && body.lastName) {
           const fLower = body.firstName.trim().toLowerCase();
           const lLower = (body.lastName || '').trim().toLowerCase();
+          const match = memoryLeads.find(
+            (l: any) =>
+              (l.firstName || '').trim().toLowerCase() === fLower &&
+              (l.lastName || '').trim().toLowerCase() === lLower
+          );
+          if (match) {
+            existingDocId = match.id;
+            existingDocData = match;
+          }
+        }
+
+        // 2. If not found in memory, do a targeted indexed lookup (limit 1) instead of scanning entire collection
+        if (!existingDocId && incomingNormUrl && body.linkedinUrl) {
           let q: any = adminDb.collection('leads');
           if (resolvedWorkspaceId) {
             q = q.where('workspaceId', '==', resolvedWorkspaceId);
           }
+          q = q.where('linkedinUrl', '==', body.linkedinUrl).limit(1);
           const snap = await q.get();
-          for (const doc of snap.docs) {
-            const d = doc.data();
-            if (
-              (d.firstName || '').trim().toLowerCase() === fLower &&
-              (d.lastName || '').trim().toLowerCase() === lLower
-            ) {
-              existingDocId = doc.id;
-              existingDocData = d;
-              break;
-            }
+          if (!snap.empty) {
+            existingDocId = snap.docs[0].id;
+            existingDocData = snap.docs[0].data();
           }
         }
       } catch (findErr) {

@@ -37,10 +37,16 @@ export async function GET(req: NextRequest) {
       seqQ = seqQ.where('workspaceId', '==', workspaceId);
     }
 
-    const [leadsSnap, seqSnap] = await Promise.all([leadsQ.get(), seqQ.get()]);
+    let leads: any[] = [];
+    let sequences: any[] = [];
 
-    const leads = leadsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-    const sequences = seqSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+    try {
+      const [leadsSnap, seqSnap] = await Promise.all([leadsQ.get(), seqQ.get()]);
+      leads = leadsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      sequences = seqSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+    } catch (dbErr) {
+      console.warn('[API /sync GET] Firestore read fallback:', (dbErr as any)?.message || dbErr);
+    }
 
     return NextResponse.json(
       {
