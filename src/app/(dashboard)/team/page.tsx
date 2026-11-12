@@ -22,12 +22,13 @@ import { useAuthContext } from '@/context/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { TeamMember } from '@/types/crm';
 import { toast } from 'sonner';
+import { api, errorMessage } from '@/lib/apiClient';
 
 export default function TeamPage() {
   const searchParams = useSearchParams();
   const initialAction = searchParams.get('action');
 
-  const { team, leads, addTeamMember, bulkAssign } = useCRM();
+  const { team, leads, bulkAssign } = useCRM();
   const { user, role, setRole } = useAuthContext();
 
   const [isInviteOpen, setIsInviteOpen] = useState(initialAction === 'invite');
@@ -50,46 +51,28 @@ export default function TeamPage() {
   const [reassignMember, setReassignMember] = useState<TeamMember | null>(null);
   const [targetMemberId, setTargetMemberId] = useState('');
 
-  const handleInvite = (e: React.FormEvent) => {
+  const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inviteName.trim() || !inviteEmail.trim()) return;
+    const email = inviteEmail.trim();
+    if (!email) return;
 
-    setPendingInvites([
-      ...pendingInvites,
-      {
-        id: `inv_${Date.now()}`,
-        name: inviteName.trim(),
-        email: inviteEmail.trim(),
-        role: inviteRole,
-        invitedAt: 'Just now',
-      },
-    ]);
-
-    setIsInviteOpen(false);
-    setInviteName('');
-    setInviteEmail('');
-    toast.success('Invitation dispatched per decision tree walkthrough');
+    try {
+      await api('/api/invitations/create', {
+        method: 'POST',
+        body: { email, role: /account|ae/i.test(inviteRole) ? 'ae' : 'sdr' },
+      });
+      setIsInviteOpen(false);
+      setInviteName('');
+      setInviteEmail('');
+      toast.success(`Invitation sent to ${email}`);
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to send invitation'));
+    }
   };
 
-  const handleAcceptInvite = (invite: { id: string; name: string; email: string; role: string }) => {
-    addTeamMember({
-      name: invite.name,
-      email: invite.email,
-      role: invite.role,
-      avatarBg: 'bg-[#0091ae]',
-      initials: invite.name
-        .split(' ')
-        .map((n) => n[0])
-        .join('')
-        .toUpperCase()
-        .slice(0, 2),
-      assignedLeadsCount: 0,
-      activeSequencesCount: 0,
-      completedTasksWeek: 0,
-      status: 'active',
-    });
-    setPendingInvites(pendingInvites.filter((i) => i.id !== invite.id));
-    toast.success(`${invite.name} accepted invitation and joined workspace!`);
+  // Joining a workspace happens when the invitee accepts the emailed link; it cannot be simulated here.
+  const handleAcceptInvite = (_invite: { id: string; name: string; email: string; role: string }) => {
+    toast.info('Invitees join by opening the link in their invitation email.');
   };
 
   const handleDeclineInvite = (id: string) => {

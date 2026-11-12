@@ -107,3 +107,20 @@ export async function resolveAssignee(
   const email = (u.email as string) || '';
   return { uid, name: (u.name as string) || (m.name as string) || email.split('@')[0], email };
 }
+
+const STEP_ACTIONS = ['connection_request', 'wait_for_acceptance', 'send_message', 'wait_delay', 'followup', 'complete_details'];
+export const MAX_STEPS = 50;
+
+/** Normalises user-supplied sequence steps: bounded, typed, renumbered from 1. */
+export function sanitizeSteps(input: unknown): Record<string, any>[] | null {
+  if (!Array.isArray(input)) return null;
+  return input.slice(0, MAX_STEPS).map((s: any, idx: number) => ({
+    ...(typeof s?.id === 'string' ? { id: str(s.id, 100) } : {}),
+    stepNumber: idx + 1,
+    actionType: STEP_ACTIONS.includes(s?.actionType) ? s.actionType : 'send_message',
+    title: str(s?.title, 200) || `Step ${idx + 1}`,
+    delayDays: Number.isFinite(s?.delayDays) && s.delayDays >= 0 ? Math.min(s.delayDays, 365) : 0,
+    messageTemplate: str(s?.messageTemplate, 3000),
+    enabled: s?.enabled !== false,
+  }));
+}

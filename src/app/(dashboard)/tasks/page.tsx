@@ -44,7 +44,7 @@ export default function TasksPage() {
     updateTaskStatus,
     rescheduleTask,
     deleteTask,
-    advanceLeadStep,
+    today,
   } = useCRM();
 
   const [activeFilter, setActiveFilter] = useState<string>(initialFilter);
@@ -58,9 +58,9 @@ export default function TasksPage() {
   const [taskType, setTaskType] = useState<Task['type']>('linkedin_message');
   const [taskDueDate, setTaskDueDate] = useState(getTodayString());
   const [taskPriority, setTaskPriority] = useState<Task['priority']>('medium');
-  const [taskAssignedTo, setTaskAssignedTo] = useState(team[0]?.id || 'user_alex_rivera');
+  const [taskAssignedTo, setTaskAssignedTo] = useState('');
 
-  const todayStr = getTodayString();
+  const todayStr = today;
 
   const filteredTasks = tasks.filter((t) => {
     // Role-based Access Control: SDR can see ONLY their assigned tasks
@@ -95,52 +95,41 @@ export default function TasksPage() {
     return true; // 'all'
   });
 
-  const handleCreateTask = (e: React.FormEvent) => {
+  const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!taskTitle.trim()) return;
+    if (!taskTitle.trim() || !taskLeadId) return;
 
-    const lead = leads.find((l) => l.id === taskLeadId) || leads[0];
-    const member = team.find((m) => m.id === taskAssignedTo) || team[0];
-
-    createTask({
+    // The server validates the lead, derives its name/company, and only lets admins assign to others.
+    const created = await createTask({
       title: taskTitle.trim(),
-      leadId: lead?.id || 'lead_none',
-      leadName: lead ? `${lead.firstName} ${lead.lastName}` : 'General',
-      leadCompany: lead ? lead.company : 'Workspace',
+      leadId: taskLeadId,
       type: taskType,
       dueDate: taskDueDate,
-      assignedToId: member.id,
-      assignedToName: member.name,
       priority: taskPriority,
-      status: 'pending',
+      ...(isAdmin && taskAssignedTo ? { assignedToId: taskAssignedTo } : {}),
     });
+    if (!created) return;
 
     setIsCreating(false);
     setTaskTitle('');
-    toast.success('LinkedIn task added to queue');
   };
 
-  const handleReschedule = (e: React.FormEvent) => {
+  const handleReschedule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reschedulingTask || !newDueDate) return;
-    rescheduleTask(reschedulingTask.id, newDueDate);
+    const ok = await rescheduleTask(reschedulingTask.id, newDueDate);
+    if (!ok) return;
     setReschedulingTask(null);
     setNewDueDate('');
   };
 
-  // Canvas Action: Mark message sent manually
+  // Marking the live step task done also advances the lead's sequence, atomically on the server.
   const handleMarkSent = (task: Task) => {
-    updateTaskStatus(task.id, 'completed');
-    if (task.leadId) {
-      advanceLeadStep(task.leadId);
-    }
-    toast.success('Task marked as sent. Reply check scheduled per decision tree.');
+    void updateTaskStatus(task.id, 'completed');
   };
 
-  // Canvas Action: Skip task
   const handleSkipTask = (task: Task) => {
-    updateTaskStatus(task.id, 'skipped');
-    toast.info('Task skipped and recorded in activity log');
+    void updateTaskStatus(task.id, 'skipped');
   };
 
   return (

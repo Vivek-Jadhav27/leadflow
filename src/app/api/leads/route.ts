@@ -3,9 +3,12 @@ export const dynamic = 'force-dynamic';
 
 import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { FieldPath } from 'firebase-admin/firestore';
 import type { Query, DocumentData } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceMember } from '@/lib/serverAuth';
+import { buildCreationExtras, deleteLeadDependents, getContext } from '@/lib/crmEngine';
+import { buildActivity, buildTask, isDateString } from '@/lib/crmPlanner';
 import {
   MAX_BATCH,
   canAccessLead,
@@ -25,8 +28,12 @@ const corsHeaders = {
 };
 
 const DEFAULT_LIMIT = 200;
-const MAX_LIMIT = 1000;
+const MAX_LIMIT = 500;
 const MAX_CUSTOM_STEPS = 20;
+
+// Fields only the workflow actions may change, and the statuses a user may set by hand.
+const WORKFLOW_FIELDS = ['sequenceId', 'sequenceName', 'currentStepNumber', 'totalSteps', 'sequenceMode', 'customSteps'];
+const MANUAL_OUTREACH_STATUSES = ['stopped', 'paused', 'completed'];
 
 const CONNECTION_STATUSES = [
   'not_started', 'pending', 'request_pending', 'request_sent', 'connected', 'declined', 'verified', 'not_connected',
@@ -61,7 +68,12 @@ export async function GET(req: NextRequest) {
     if (role !== 'admin') {
       q = q.where('assignedToId', '==', uid);
     }
+    // Stable cursor pagination by document id (equality filters only, so no composite index is needed).
+    q = q.orderBy(FieldPath.documentId());
+    const cursor = req.nextUrl.searchParams.get('cursor');
+    if (cursor) q = q.startAfter(cursor);
     const snap = await q.limit(limit).get();
+    const nextCursor = snap.size === limit ? snap.docs[snap.size - 1].id : null;
 
     let leads: Record<string, any>[] = snap.docs.map((d) => {
       const l = { id: d.id, ...d.data() } as Record<string, any>;
@@ -91,7 +103,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return json({ success: true, count: leads.length, leads });
+    return json({ success: true, count: leads.length, leads, nextCursor });
   } catch (err) {
     console.error('[API /leads GET] Error:', err);
     return json({ error: 'Failed to fetch leads' }, 500);
@@ -168,6 +180,7 @@ export async function POST(req: NextRequest) {
     // A referenced (non-custom) sequence must exist in this workspace and be approved.
     let sequenceId: string | null = isCustomSeq ? customSeqId : (body.sequenceId ? String(body.sequenceId) : existing?.sequenceId || null);
     let sequenceName: string | null = existing?.sequenceName || null;
+    let seqDoc: Record<string, any> | null = null;
     if (!isCustomSeq && body.sequenceId) {
       const seqSnap = await adminDb.collection('sequences').doc(String(body.sequenceId)).get();
       const seq = seqSnap.data();
@@ -179,6 +192,7 @@ export async function POST(req: NextRequest) {
       }
       sequenceId = seqSnap.id;
       sequenceName = seq.name || null;
+      seqDoc = { id: seqSnap.id, ...seq };
     }
 
     const connectionNote = str(body.connectionNote, 1000) || existing?.connectionNote || null;
@@ -309,48 +323,50 @@ export async function POST(req: NextRequest) {
 
     batch.set(adminDb.collection('leads').doc(leadId), cleanObject(newLead), { merge: true });
 
+    // Side effects that belong to creating a lead (activity log, first task) are written in the same batch.
+    const planCtx = await getContext({ uid, email, name: assignee.name, role, workspaceId });
+    const createdTasks: Record<string, any>[] = [];
+    const createdActivities: Record<string, any>[] = [];
+
+    if (!existing) {
+      const extras = buildCreationExtras(newLead, seqDoc, planCtx);
+      createdTasks.push(...extras.tasks);
+      createdActivities.push(...extras.activities);
+    }
+
     if (connectionNote) {
-      const actId = `act_${randomUUID()}`;
-      batch.set(adminDb.collection('activities').doc(actId), {
-        id: actId,
-        leadId,
-        leadName: `${firstName} ${lastName}`.trim(),
-        type: 'linkedin_connect',
-        title: 'LinkedIn Connection Note Sent',
-        description: connectionNote,
-        actorName: newLead.assignedToName || email,
-        timestamp: now,
-        workspaceId,
-      });
+      createdActivities.push(
+        buildActivity(newLead, {
+          type: 'linkedin_connect',
+          title: 'LinkedIn Connection Note Sent',
+          description: connectionNote,
+          actorName: newLead.assignedToName || email,
+        }, planCtx)
+      );
     }
 
     if (outreachStatus === 'needs_sequence') {
-      const taskId = `task_${randomUUID()}`;
-      batch.set(adminDb.collection('tasks').doc(taskId), {
-        id: taskId,
-        title: `Draft Follow-up Cadence for ${firstName} ${lastName}`.trim(),
-        leadId,
-        leadName: `${firstName} ${lastName}`.trim(),
-        leadCompany: company,
-        leadLinkedin: newLead.linkedinUrl,
-        type: 'manual_review',
-        dueDate: now.split('T')[0],
-        assignedToId: newLead.assignedToId,
-        assignedToName: newLead.assignedToName,
-        priority: 'high',
-        status: 'pending',
-        notes: connectionNote
-          ? `Connection sent with note: "${connectionNote}"`
-          : 'Connection request sent on LinkedIn. Needs follow-up sequence.',
-        workspaceId,
-        createdAt: now,
-        updatedAt: now,
-      });
+      createdTasks.push(
+        buildTask(newLead, {
+          title: `Draft Follow-up Cadence for ${firstName} ${lastName}`.trim(),
+          type: 'manual_review',
+          dueDate: planCtx.today,
+          notes: connectionNote
+            ? `Connection sent with note: "${connectionNote}"`
+            : 'Connection request sent on LinkedIn. Needs follow-up sequence.',
+        }, planCtx)
+      );
     }
+
+    createdTasks.forEach((t) => batch.set(adminDb.collection('tasks').doc(t.id), t));
+    createdActivities.forEach((a) => batch.set(adminDb.collection('activities').doc(a.id), a));
 
     await batch.commit();
 
-    return json({ success: true, message: 'Lead saved', lead: newLead }, existing ? 200 : 201);
+    return json(
+      { success: true, message: 'Lead saved', lead: newLead, tasks: createdTasks, activities: createdActivities },
+      existing ? 200 : 201
+    );
   } catch (error) {
     console.error('[API /leads POST] Error:', error);
     return json({ error: 'Failed to process lead' }, 500);
@@ -393,6 +409,23 @@ export async function PATCH(req: NextRequest) {
       const result = sanitizeLeadUpdate(items[i], isAdmin);
       if ('error' in result) return json({ error: result.error }, 400);
 
+      // Sequence progress is workflow state owned by the server actions (enroll / advance / reply / approve).
+      for (const f of WORKFLOW_FIELDS) delete result.updates[f];
+      if ('outreachStatus' in result.updates) {
+        const next = result.updates.outreachStatus as string;
+        const cur = snap.data() || {};
+        const resuming = next === 'in_sequence' && cur.outreachStatus === 'paused' && Boolean(cur.sequenceId);
+        if (!MANUAL_OUTREACH_STATUSES.includes(next) && !resuming) {
+          return json({ error: `outreachStatus "${next}" is managed by the workflow and cannot be set directly.` }, 400);
+        }
+      }
+      if ('connectionStatus' in result.updates && !CONNECTION_STATUSES.includes(result.updates.connectionStatus as string)) {
+        return json({ error: 'Invalid connectionStatus.' }, 400);
+      }
+      if ('nextFollowUpDate' in result.updates && result.updates.nextFollowUpDate !== null && !isDateString(result.updates.nextFollowUpDate)) {
+        return json({ error: 'nextFollowUpDate must be YYYY-MM-DD or null.' }, 400);
+      }
+
       const updates: Record<string, unknown> = { ...result.updates, updatedAt: now };
       if (isAdmin && 'assignedToId' in updates && updates.assignedToId !== snap.data()?.assignedToId) {
         const resolved = await resolveAssignee(workspaceId, String(updates.assignedToId));
@@ -402,6 +435,19 @@ export async function PATCH(req: NextRequest) {
         updates.assignedToEmail = resolved.email;
       }
       batch.update(refs[i], updates);
+
+      // Moving the follow-up date also moves the lead's open sequence task, so the queue and lead agree.
+      if (typeof updates.nextFollowUpDate === 'string') {
+        const openTasks = await adminDb
+          .collection('tasks')
+          .where('workspaceId', '==', workspaceId)
+          .where('leadId', '==', items[i].id)
+          .where('status', '==', 'pending')
+          .get();
+        openTasks.docs
+          .filter((d) => d.data().sequenceId)
+          .forEach((d) => batch.update(d.ref, { dueDate: updates.nextFollowUpDate, updatedAt: now }));
+      }
       updated.push({ id: items[i].id, ...updates });
     }
     await batch.commit();
@@ -453,9 +499,11 @@ export async function DELETE(req: NextRequest) {
     const snaps = await adminDb.getAll(...refs);
     const batch = adminDb.batch();
     let deletedCount = 0;
+    const deletedIds: string[] = [];
     snaps.forEach((snap, i) => {
       if (snap.exists && canAccessLead(snap.data(), { uid, role, workspaceId })) {
         batch.delete(refs[i]);
+        deletedIds.push(snap.id);
         deletedCount++;
       }
     });
@@ -463,8 +511,10 @@ export async function DELETE(req: NextRequest) {
       return json({ error: 'Lead not found' }, 404);
     }
     await batch.commit();
+    // Don't leave orphaned tasks or activity behind.
+    await deleteLeadDependents(workspaceId, deletedIds);
 
-    return json({ success: true, message: `Deleted ${deletedCount} lead(s)`, deletedCount });
+    return json({ success: true, message: `Deleted ${deletedCount} lead(s)`, deletedCount, deletedIds });
   } catch (error) {
     console.error('[API /leads DELETE] Error:', error);
     return json({ error: 'Failed to delete lead' }, 500);

@@ -5,7 +5,9 @@ import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceAdmin, requireWorkspaceMember } from '@/lib/serverAuth';
-import { MAX_BATCH, str } from '@/lib/leadValidation';
+import { sanitizeSteps, str } from '@/lib/leadValidation';
+import { approveSequence } from '@/lib/crmEngine';
+import type { EngineResult } from '@/lib/crmEngine';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,25 +15,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const MAX_STEPS = 50;
-const STEP_ACTIONS = ['connection_request', 'wait_for_acceptance', 'send_message', 'wait_delay', 'followup', 'complete_details'];
 const SEQUENCE_STATUSES = ['active', 'paused', 'draft', 'archived', 'pending_approval'];
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: corsHeaders });
-}
-
-function sanitizeSteps(input: unknown): any[] | null {
-  if (!Array.isArray(input)) return null;
-  return input.slice(0, MAX_STEPS).map((s: any, idx: number) => ({
-    ...(typeof s?.id === 'string' ? { id: str(s.id, 100) } : {}),
-    stepNumber: idx + 1,
-    actionType: STEP_ACTIONS.includes(s?.actionType) ? s.actionType : 'send_message',
-    title: str(s?.title, 200) || `Step ${idx + 1}`,
-    delayDays: Number.isFinite(s?.delayDays) && s.delayDays >= 0 ? Math.min(s.delayDays, 365) : 0,
-    messageTemplate: str(s?.messageTemplate, 3000),
-    enabled: s?.enabled !== false,
-  }));
 }
 
 export async function OPTIONS() {
@@ -140,33 +127,23 @@ export async function POST(req: NextRequest) {
     await adminDb.collection('sequences').doc(seqId).set(sequenceData, { merge: true });
 
     // Newly approved: activate leads that were waiting on this sequence (same workspace only).
+    // The engine matches leads by explicit links only and also schedules their first task.
+    let activation: EngineResult | null = null;
     if (isApproved && !wasApproved) {
-      const leadsToActivate = sequenceData.targetLeadId
-        ? [await adminDb.collection('leads').doc(sequenceData.targetLeadId).get()]
-        : (await adminDb.collection('leads').where('workspaceId', '==', workspaceId).where('sequenceId', '==', seqId).limit(MAX_BATCH).get()).docs;
-
-      const batch = adminDb.batch();
-      let writes = 0;
-      for (const leadDoc of leadsToActivate) {
-        const l = leadDoc.data();
-        if (!leadDoc.exists || !l || l.workspaceId !== workspaceId) continue;
-        if (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence') {
-          const step2 = sequenceData.steps?.[1];
-          const delay = step2?.delayDays || 3;
-          batch.update(leadDoc.ref, {
-            outreachStatus: 'in_sequence',
-            currentStepNumber: 2,
-            nextActionTitle: step2?.title || 'Step 2: Follow-up 1',
-            nextFollowUpDate: l.nextFollowUpDate || new Date(Date.now() + delay * 86400000).toISOString().split('T')[0],
-            updatedAt: now,
-          });
-          writes++;
-        }
-      }
-      if (writes > 0) await batch.commit();
+      activation = await approveSequence(
+        { uid, email, name: auth.context.profile?.name || email.split('@')[0], role, workspaceId },
+        seqId
+      );
     }
 
-    return json({ success: true, message: 'Sequence saved successfully', sequence: sequenceData });
+    return json({
+      success: true,
+      message: 'Sequence saved successfully',
+      sequence: activation?.sequence ?? sequenceData,
+      leads: activation?.leads ?? [],
+      tasks: activation?.tasks ?? [],
+      activities: activation?.activities ?? [],
+    });
   } catch (error) {
     console.error('[API /sequences POST] Error:', error);
     return json({ error: 'Failed to save sequence' }, 500);
