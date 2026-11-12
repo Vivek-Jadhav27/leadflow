@@ -136,16 +136,27 @@ class PrototypeStore {
         (lead.capturedByUid && m.id === lead.capturedByUid)
     );
 
+    let normalized = lead;
     if (member) {
-      return {
-        ...lead,
+      normalized = {
+        ...normalized,
         assignedToId: member.id,
         assignedToName: member.name,
         assignedToEmail: member.email,
-        capturedByUid: lead.capturedByUid || member.id,
+        capturedByUid: normalized.capturedByUid || member.id,
       };
     }
-    return lead;
+
+    // Strict invariant: If a lead has no sequence assigned, its outreachStatus cannot be in_sequence
+    if (!normalized.sequenceId && normalized.outreachStatus === 'in_sequence') {
+      normalized = {
+        ...normalized,
+        outreachStatus: 'unassigned',
+        currentStepNumber: 0,
+        nextActionTitle: null,
+      };
+    }
+    return normalized;
   }
 
   public reNormalizeAllLeads(): void {
@@ -384,7 +395,9 @@ class PrototypeStore {
         currentStepNumber: item.currentStepNumber || 0,
         totalSteps: item.totalSteps || 4,
         connectionStatus: item.connectionStatus || 'not_started',
-        outreachStatus: item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned'),
+        outreachStatus: (!item.sequenceId && item.outreachStatus === 'in_sequence')
+          ? 'unassigned'
+          : (item.outreachStatus || (item.sequenceId ? 'in_sequence' : 'unassigned')),
         disposition: item.disposition || 'active',
         outcome: item.outcome || null,
         workspaceId: item.workspaceId || null,

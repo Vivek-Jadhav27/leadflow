@@ -454,9 +454,13 @@ export default function LeadsPage() {
         </span>
       );
     }
+    const displayStatus = (!lead.sequenceId && lead.outreachStatus === 'in_sequence')
+      ? 'unassigned'
+      : (lead.outreachStatus || 'unassigned');
+
     return (
       <span className="inline-flex items-center rounded px-2 py-0.5 text-[10px] font-medium bg-[#f5f8fa] text-[#516f90] border border-[#dfe3eb] capitalize">
-        {lead.outreachStatus.replace('_', ' ')}
+        {displayStatus.replace('_', ' ')}
       </span>
     );
   };

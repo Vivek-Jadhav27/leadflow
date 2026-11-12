@@ -54,10 +54,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const leadForm             = $('lead-form');
 
   // Outreach & Cadence Elements
+  const tabModeNone           = $('tab-mode-none');
   const tabModeApproved       = $('tab-mode-approved');
   const tabModeCustom         = $('tab-mode-custom');
+  const sectionNoneSeq        = $('section-none-seq');
   const sectionApprovedSeq    = $('section-approved-seq');
   const sectionCustomSeq      = $('section-custom-seq');
+  const noneNotes             = $('none-notes');
   const seqSelect             = $('seq-select');
   const step1PreviewBox       = $('step1-preview-box');
   const step1NoteText         = $('step1-note-text');
@@ -72,7 +75,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const customStep3Delay      = $('custom-step3-delay');
   const customStep3Msg        = $('custom-step3-msg');
 
-  let activeOutreachMode = 'approved'; // 'approved' | 'custom'
+  let activeOutreachMode = 'none'; // 'none' | 'approved' | 'custom'
   let cachedSequences = [];
 
   // Clean / normalize URL
@@ -358,7 +361,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (seqSelect) {
       const currentVal = seqSelect.value;
-      seqSelect.innerHTML = '<option value="">-- Choose Sequence --</option>';
+      seqSelect.innerHTML = '<option value="">-- No Sequence (Assign Later) --</option>';
       cachedSequences.forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.id;
@@ -368,8 +371,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (currentVal && cachedSequences.some(s => s.id === currentVal)) {
         seqSelect.value = currentVal;
-      } else if (cachedSequences.length > 0) {
-        seqSelect.value = cachedSequences[0].id;
+      } else {
+        seqSelect.value = '';
       }
       updateStep1Preview();
     }
@@ -379,6 +382,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateStep1Preview() {
     if (!seqSelect || !step1PreviewBox || !step1NoteText) return;
     const selectedSeqId = seqSelect.value;
+    if (!selectedSeqId) {
+      step1PreviewBox.style.display = 'none';
+      return;
+    }
     const seq = cachedSequences.find(s => s.id === selectedSeqId);
     if (!seq || !seq.steps || seq.steps.length === 0) {
       step1PreviewBox.style.display = 'none';
@@ -408,23 +415,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     step1PreviewBox.style.display = 'block';
   }
 
-  // Outreach mode tabs toggling
-  if (tabModeApproved && tabModeCustom) {
-    tabModeApproved.addEventListener('click', () => {
-      activeOutreachMode = 'approved';
-      tabModeApproved.classList.add('active');
-      tabModeCustom.classList.remove('active');
-      if (sectionApprovedSeq) sectionApprovedSeq.style.display = 'block';
-      if (sectionCustomSeq)   sectionCustomSeq.style.display = 'none';
-    });
+  // Outreach mode tabs toggling (No Sequence | Pre-Approved | Custom)
+  function setActiveTab(mode) {
+    activeOutreachMode = mode;
+    if (tabModeNone)     tabModeNone.classList.toggle('active', mode === 'none');
+    if (tabModeApproved) tabModeApproved.classList.toggle('active', mode === 'approved');
+    if (tabModeCustom)   tabModeCustom.classList.toggle('active', mode === 'custom');
 
-    tabModeCustom.addEventListener('click', () => {
-      activeOutreachMode = 'custom';
-      tabModeCustom.classList.add('active');
-      tabModeApproved.classList.remove('active');
-      if (sectionCustomSeq)   sectionCustomSeq.style.display = 'block';
-      if (sectionApprovedSeq) sectionApprovedSeq.style.display = 'none';
-    });
+    if (sectionNoneSeq)     sectionNoneSeq.style.display     = (mode === 'none') ? 'block' : 'none';
+    if (sectionApprovedSeq) sectionApprovedSeq.style.display = (mode === 'approved') ? 'block' : 'none';
+    if (sectionCustomSeq)   sectionCustomSeq.style.display   = (mode === 'custom') ? 'block' : 'none';
+  }
+
+  if (tabModeNone) {
+    tabModeNone.addEventListener('click', () => setActiveTab('none'));
+  }
+  if (tabModeApproved) {
+    tabModeApproved.addEventListener('click', () => setActiveTab('approved'));
+  }
+  if (tabModeCustom) {
+    tabModeCustom.addEventListener('click', () => setActiveTab('custom'));
   }
 
   if (seqSelect) {
@@ -494,24 +504,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     banner.className = 'banner';
     banner.style.display = 'none';
 
-    const isApprovedMode = (activeOutreachMode === 'approved');
     let sequencePayload = {};
 
-    if (isApprovedMode) {
-      const selectedSeq = cachedSequences.find(s => s.id === seqSelect?.value);
-      const isSent = chkConnSentApproved ? chkConnSentApproved.checked : true;
-      const note = (step1PreviewBox && step1PreviewBox.style.display !== 'none') ? step1NoteText.innerText : null;
-
+    if (activeOutreachMode === 'none') {
+      const noteVal = noneNotes ? noneNotes.value.trim() : '';
       sequencePayload = {
-        sequenceMode: 'approved',
-        sequenceId: selectedSeq?.id || null,
-        sequenceName: selectedSeq?.name || null,
-        connectionStatus: isSent ? 'request_sent' : 'not_started',
-        connectionNote: note,
-        notes: note ? `Connection note: ${note}` : null,
-        isConnectionSent: isSent,
-        outreachStatus: isSent ? 'in_sequence' : (selectedSeq ? 'in_sequence' : 'unassigned'),
+        sequenceMode: 'none',
+        sequenceId: null,
+        sequenceName: null,
+        currentStepNumber: 0,
+        totalSteps: 0,
+        connectionStatus: 'not_started',
+        connectionNote: null,
+        notes: noteVal || null,
+        isConnectionSent: false,
+        outreachStatus: 'unassigned',
+        disposition: 'active',
       };
+    } else if (activeOutreachMode === 'approved') {
+      const selectedSeq = cachedSequences.find(s => s.id === seqSelect?.value);
+      if (!selectedSeq) {
+        // User chose '-- No Sequence (Assign Later) --' in approved mode
+        sequencePayload = {
+          sequenceMode: 'none',
+          sequenceId: null,
+          sequenceName: null,
+          currentStepNumber: 0,
+          totalSteps: 0,
+          connectionStatus: 'not_started',
+          connectionNote: null,
+          notes: null,
+          isConnectionSent: false,
+          outreachStatus: 'unassigned',
+          disposition: 'active',
+        };
+      } else {
+        const isSent = chkConnSentApproved ? chkConnSentApproved.checked : true;
+        const note = (step1PreviewBox && step1PreviewBox.style.display !== 'none') ? step1NoteText.innerText : null;
+
+        sequencePayload = {
+          sequenceMode: 'approved',
+          sequenceId: selectedSeq.id,
+          sequenceName: selectedSeq.name,
+          connectionStatus: isSent ? 'request_sent' : 'not_started',
+          connectionNote: note,
+          notes: note ? `Connection note: ${note}` : null,
+          isConnectionSent: isSent,
+          outreachStatus: isSent ? 'in_sequence' : 'in_sequence',
+        };
+      }
     } else {
       const note = customConnNote ? customConnNote.value.trim() : '';
       const hasCustomFollowUps = Boolean(customStep2Msg?.value.trim() || customStep3Msg?.value.trim());

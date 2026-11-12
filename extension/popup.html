@@ -407,17 +407,30 @@
         <div class="outreach-header">
           <label class="outreach-title">Outreach Cadence</label>
           <div class="mode-tabs">
-            <button type="button" class="mode-tab active" id="tab-mode-approved">Pre-Approved</button>
+            <button type="button" class="mode-tab active" id="tab-mode-none">No Sequence</button>
+            <button type="button" class="mode-tab" id="tab-mode-approved">Pre-Approved</button>
             <button type="button" class="mode-tab" id="tab-mode-custom">Custom</button>
           </div>
         </div>
 
+        <!-- Mode 0: No Sequence (Assign Later) -->
+        <div id="section-none-seq">
+          <div style="padding: 8px 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 11px; color: #166534; line-height: 1.4; margin-bottom: 8px;">
+            <div style="font-weight: 700; margin-bottom: 2px;">⚡ Capture Lead Only</div>
+            Add this prospect to your CRM now without selecting a cadence. An SDR or AE can assign an approved sequence or create a custom cadence later on the portal.
+          </div>
+          <div class="fg" style="margin-bottom: 6px;">
+            <label for="none-notes">Lead Note (Optional)</label>
+            <input type="text" id="none-notes" placeholder="e.g. Connected on LinkedIn, demo requested..." />
+          </div>
+        </div>
+
         <!-- Mode 1: Pre-Approved Sequence -->
-        <div id="section-approved-seq">
+        <div id="section-approved-seq" style="display:none;">
           <div class="fg" style="margin-bottom: 6px;">
             <label for="seq-select">Select Approved Sequence</label>
             <select id="seq-select" class="seq-select">
-              <option value="">-- Choose Sequence --</option>
+              <option value="">-- No Sequence (Assign Later) --</option>
             </select>
           </div>
 

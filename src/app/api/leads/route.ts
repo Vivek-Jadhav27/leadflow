@@ -180,11 +180,15 @@ export async function GET(req: NextRequest) {
       const assignedId = l.assignedToId || l.capturedByUid || null;
       const assignedEmail = l.assignedToEmail || l.capturedBy || null;
       const assignedName = l.assignedToName || (assignedEmail ? assignedEmail.split('@')[0] : 'Unassigned');
+      const normalizedOutreach = (!l.sequenceId && l.outreachStatus === 'in_sequence')
+        ? 'unassigned'
+        : (l.outreachStatus || (l.sequenceId ? 'in_sequence' : 'unassigned'));
       return {
         ...l,
         assignedToId: assignedId,
         assignedToEmail: assignedEmail,
         assignedToName: assignedName,
+        outreachStatus: normalizedOutreach,
       };
     });
 
@@ -311,7 +315,9 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
     const isConnSent = body.isConnectionSent || body.connectionStatus === 'request_sent' || Boolean(body.connectionNote);
     const resolvedConnStatus = isConnSent ? 'request_sent' : (body.connectionStatus || 'not_started');
-    const resolvedOutreachStatus = body.outreachStatus || (body.sequenceId ? 'in_sequence' : 'unassigned');
+    const resolvedOutreachStatus = (!body.sequenceId && body.outreachStatus === 'in_sequence')
+      ? 'unassigned'
+      : (body.outreachStatus || (body.sequenceId ? 'in_sequence' : 'unassigned'));
     const resolvedStepNumber = (isConnSent && body.sequenceId) ? 2 : (body.currentStepNumber || (body.sequenceId ? 1 : 0));
     const defaultFollowUp = (isConnSent && body.sequenceId)
       ? new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0]

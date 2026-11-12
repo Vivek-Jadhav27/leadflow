@@ -275,7 +275,20 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const isSeqApproved = Boolean(sequence && (sequence.approvalStatus === 'approved' || sequence.status === 'active'));
   const effectiveOutreachStatus = (isSeqApproved && lead?.outreachStatus === 'pending_sequence_approval')
     ? 'in_sequence'
+    : (!sequence && !lead?.sequenceId)
+    ? (lead?.outreachStatus === 'needs_sequence' ? 'needs_sequence' : 'unassigned')
     : (lead?.outreachStatus || 'unassigned');
+
+  // Auto-heal: If lead has no sequence assigned, its outreachStatus cannot be in_sequence
+  React.useEffect(() => {
+    if (lead && !lead.sequenceId && !sequence && lead.outreachStatus === 'in_sequence') {
+      updateLead(lead.id, {
+        outreachStatus: 'unassigned',
+        currentStepNumber: 0,
+        nextActionTitle: null,
+      });
+    }
+  }, [lead?.id, lead?.sequenceId, sequence, lead?.outreachStatus, updateLead]);
 
   // Auto-heal: If cadence is already approved by Admin, transition lead to in_sequence immediately
   React.useEffect(() => {

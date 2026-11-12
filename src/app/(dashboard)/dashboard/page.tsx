@@ -36,7 +36,7 @@ export default function DashboardOverviewPage() {
     async function loadStats() {
       if (!currentWorkspace?.workspaceId) return;
       try {
-        const res = await fetch(`/api/dashboard?workspaceId=${encodeURIComponent(currentWorkspace.workspaceId)}`);
+        const res = await fetch('/api/workspaces/current');
         if (res.ok) {
           const data = await res.json();
           if (data.stats) {

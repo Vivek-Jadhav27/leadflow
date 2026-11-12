@@ -79,26 +79,6 @@ export async function OPTIONS() {
 
 export async function GET(req: NextRequest) {
   try {
-    const workspaceIdParam =
-      req.headers.get('x-workspace-id') ||
-      req.nextUrl.searchParams.get('workspaceId');
-
-    const cacheKey = workspaceIdParam || 'all';
-    const cached = sequencesServerCache.get(cacheKey);
-    const nowTs = Date.now();
-
-    if (cached && nowTs - cached.cachedAt < SEQUENCES_CACHE_TTL_MS) {
-      return NextResponse.json(
-        {
-          success: true,
-          count: cached.count,
-          sequences: cached.sequences,
-          fromCache: true,
-        },
-        { status: 200, headers: corsHeaders }
-      );
-    }
-
     const isAdminReady =
       typeof isFirebaseAdminConfigured === 'function'
         ? isFirebaseAdminConfigured()
@@ -144,6 +124,23 @@ export async function GET(req: NextRequest) {
           }
         }
       } catch {}
+    }
+
+    // Role-isolated cache key so Admin views are never poisoned by SDR-filtered caches
+    const cacheKey = `${resolvedWorkspaceId || 'all'}_${callerRole}_${callerUid || 'anon'}`;
+    const cached = sequencesServerCache.get(cacheKey);
+    const nowTs = Date.now();
+
+    if (cached && nowTs - cached.cachedAt < SEQUENCES_CACHE_TTL_MS) {
+      return NextResponse.json(
+        {
+          success: true,
+          count: cached.count,
+          sequences: cached.sequences,
+          fromCache: true,
+        },
+        { status: 200, headers: corsHeaders }
+      );
     }
 
     let firestoreSequences: any[] = [];
