@@ -127,6 +127,32 @@ class PrototypeStore {
     return () => this.listeners.delete(listener);
   }
 
+  public normalizeLeadRecord(lead: Lead): Lead {
+    const member = this.db.team.find(
+      (m) =>
+        (lead.assignedToId && m.id === lead.assignedToId) ||
+        (lead.assignedToEmail && m.email?.toLowerCase().trim() === lead.assignedToEmail?.toLowerCase().trim()) ||
+        (lead.capturedBy && m.email?.toLowerCase().trim() === lead.capturedBy?.toLowerCase().trim()) ||
+        (lead.capturedByUid && m.id === lead.capturedByUid)
+    );
+
+    if (member) {
+      return {
+        ...lead,
+        assignedToId: member.id,
+        assignedToName: member.name,
+        assignedToEmail: member.email,
+        capturedByUid: lead.capturedByUid || member.id,
+      };
+    }
+    return lead;
+  }
+
+  public reNormalizeAllLeads(): void {
+    if (!Array.isArray(this.db.leads) || !Array.isArray(this.db.team)) return;
+    this.db.leads = this.db.leads.map((l) => this.normalizeLeadRecord(l));
+  }
+
   // --- Leads Operations ---
   public getLeads(workspaceId?: string): Lead[] {
     if (!workspaceId) return [...this.db.leads];
@@ -139,12 +165,12 @@ class PrototypeStore {
 
   public createLead(input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>): Lead {
     const now = new Date().toISOString();
-    const newLead: Lead = {
+    const newLead: Lead = this.normalizeLeadRecord({
       ...input,
       id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       createdAt: now,
       updatedAt: now,
-    };
+    });
 
     this.db.leads.unshift(newLead);
 
@@ -493,19 +519,21 @@ class PrototypeStore {
         }
       }
 
+      const normLead = this.normalizeLeadRecord(leadRecord);
+
       if (existingIndex === -1) {
-        this.db.leads.push(leadRecord);
+        this.db.leads.push(normLead);
         modifiedCount++;
       } else {
         const existing = this.db.leads[existingIndex];
-        this.db.leads[existingIndex] = {
+        this.db.leads[existingIndex] = this.normalizeLeadRecord({
           ...existing,
-          ...leadRecord,
+          ...normLead,
           id: existing.id,
-          connectionNote: leadRecord.connectionNote || existing.connectionNote || null,
-          notes: leadRecord.notes || existing.notes || null,
-          activityHistory: [...(leadRecord.activityHistory || []), ...(existing.activityHistory || [])],
-        };
+          connectionNote: normLead.connectionNote || existing.connectionNote || null,
+          notes: normLead.notes || existing.notes || null,
+          activityHistory: [...(normLead.activityHistory || []), ...(existing.activityHistory || [])],
+        });
         modifiedCount++;
       }
     }
@@ -519,6 +547,7 @@ class PrototypeStore {
   public syncIncomingTeam(incoming: TeamMember[]): void {
     if (!Array.isArray(incoming)) return;
     this.db.team = incoming;
+    this.reNormalizeAllLeads();
     this.persistAndNotify();
   }
 
@@ -547,11 +576,11 @@ class PrototypeStore {
     if (index === -1) return undefined;
 
     const existing = this.db.leads[index];
-    const updated: Lead = {
+    const updated: Lead = this.normalizeLeadRecord({
       ...existing,
       ...updates,
       updatedAt: new Date().toISOString(),
-    };
+    });
 
     this.db.leads[index] = updated;
     this.persistAndNotify();
@@ -926,25 +955,78 @@ class PrototypeStore {
     const index = this.db.sequences.findIndex((s) => s.id === sequence.id);
     const now = new Date().toISOString();
 
+    let savedSeq: Sequence;
     if (index >= 0) {
-      const updated: Sequence = {
+      const existing = this.db.sequences[index];
+      savedSeq = {
+        ...existing,
         ...sequence,
+        createdBy: sequence.createdBy || existing.createdBy,
+        createdByUid: sequence.createdByUid || existing.createdByUid,
+        createdByRole: sequence.createdByRole || existing.createdByRole,
         updatedAt: now,
       };
-      this.db.sequences[index] = updated;
-      this.persistAndNotify();
-      return updated;
+      this.db.sequences[index] = savedSeq;
     } else {
-      const created: Sequence = {
+      savedSeq = {
         ...sequence,
         id: sequence.id || `seq_${Date.now()}`,
         createdAt: now,
         updatedAt: now,
       };
-      this.db.sequences.unshift(created);
-      this.persistAndNotify();
-      return created;
+      this.db.sequences.unshift(savedSeq);
     }
+
+    // If sequence is approved or active, ensure matching leads are activated if pending approval
+    if (savedSeq.approvalStatus === 'approved' || savedSeq.status === 'active') {
+      const step2 = savedSeq.steps?.find((s) => s.stepNumber === 2) || savedSeq.steps?.[1];
+      const delayDays = step2?.delayDays ?? 3;
+      const dueDate = getFutureDateString(delayDays);
+
+      this.db.leads.forEach((l) => {
+        const matches =
+          l.sequenceId === savedSeq.id ||
+          (savedSeq.targetLeadId && l.id === savedSeq.targetLeadId) ||
+          savedSeq.id === `seq_custom_${l.id}` ||
+          savedSeq.id.startsWith(`seq_custom_${l.id}`) ||
+          (l.firstName && l.lastName && savedSeq.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`));
+
+        if (matches && (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence')) {
+          l.sequenceId = savedSeq.id;
+          l.sequenceName = savedSeq.name;
+          l.outreachStatus = 'in_sequence';
+          l.currentStepNumber = 2;
+          l.nextActionTitle = step2?.title || 'Step 2: Follow-up 1';
+          l.nextFollowUpDate = l.nextFollowUpDate || dueDate;
+          l.totalSteps = savedSeq.steps ? savedSeq.steps.length : (l.totalSteps || 3);
+
+          if (step2) {
+            const hasTask = this.db.tasks.some((t) => t.leadId === l.id && t.stepNumber === 2 && t.status === 'pending');
+            if (!hasTask) {
+              this.createTask({
+                title: `Step 2: ${step2.title || 'First Follow-up'} for ${l.firstName} ${l.lastName}`,
+                leadId: l.id,
+                leadName: `${l.firstName} ${l.lastName}`,
+                leadCompany: l.company,
+                leadLinkedin: l.linkedinUrl,
+                sequenceId: savedSeq.id,
+                stepNumber: 2,
+                type: 'linkedin_message',
+                dueDate: dueDate,
+                assignedToId: l.assignedToId || 'sdr_current',
+                assignedToName: l.assignedToName || 'Outbound SDR',
+                priority: 'high',
+                status: 'pending',
+                messageTemplate: step2.messageTemplate,
+              });
+            }
+          }
+        }
+      });
+    }
+
+    this.persistAndNotify();
+    return savedSeq;
   }
 
   public approveSequence(id: string, approverName: string = 'Workspace Admin'): Sequence | undefined {
@@ -957,6 +1039,72 @@ class PrototypeStore {
     seq.approvedBy = approverName;
     seq.approvedAt = now;
     seq.updatedAt = now;
+
+    // Find all leads enrolled in or targeting this sequence
+    const matchedLeads = this.db.leads.filter((l) => {
+      if (l.sequenceId === seq.id) return true;
+      if (seq.targetLeadId && l.id === seq.targetLeadId) return true;
+      if (seq.id === `seq_custom_${l.id}` || seq.id.startsWith(`seq_custom_${l.id}`)) return true;
+      if (
+        l.firstName &&
+        l.lastName &&
+        seq.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    const step2 = seq.steps?.find((s) => s.stepNumber === 2) || seq.steps?.[1];
+    const delayDays = step2?.delayDays ?? 3;
+    const dueDate = getFutureDateString(delayDays);
+
+    matchedLeads.forEach((l) => {
+      l.sequenceId = seq.id;
+      l.sequenceName = seq.name;
+      l.totalSteps = seq.steps ? seq.steps.length : (l.totalSteps || 3);
+
+      if (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence') {
+        l.outreachStatus = 'in_sequence';
+        l.currentStepNumber = 2; // Step 1 (connection note) was already sent; now at Step 2
+        l.nextActionTitle = step2?.title || 'Step 2: Follow-up 1';
+        l.nextFollowUpDate = l.nextFollowUpDate || dueDate;
+
+        // Add activity event
+        this.addActivityEvent({
+          leadId: l.id,
+          leadName: `${l.firstName} ${l.lastName}`,
+          type: 'sequence_assigned',
+          title: 'Custom Cadence Approved & Activated',
+          description: `Cadence "${seq.name}" was approved by ${approverName}. Step 2 follow-up scheduled for ${dueDate}.`,
+          actorName: approverName,
+          timestamp: now,
+        });
+
+        // Remove any previous pending tasks for this lead so they don't collide
+        this.db.tasks = this.db.tasks.filter((t) => t.leadId !== l.id || t.status === 'completed');
+
+        // Create the Step 2 task
+        if (step2) {
+          this.createTask({
+            title: `Step 2: ${step2.title || 'First Follow-up'} for ${l.firstName} ${l.lastName}`,
+            leadId: l.id,
+            leadName: `${l.firstName} ${l.lastName}`,
+            leadCompany: l.company,
+            leadLinkedin: l.linkedinUrl,
+            sequenceId: seq.id,
+            stepNumber: 2,
+            type: 'linkedin_message',
+            dueDate: dueDate,
+            assignedToId: l.assignedToId || 'sdr_current',
+            assignedToName: l.assignedToName || 'Outbound SDR',
+            priority: 'high',
+            status: 'pending',
+            messageTemplate: step2.messageTemplate,
+          });
+        }
+      }
+    });
 
     this.persistAndNotify();
     return seq;

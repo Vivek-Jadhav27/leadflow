@@ -179,9 +179,16 @@ export function useCRM() {
     (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
         const targetWorkspaceId = input.workspaceId || currentWorkspaceId;
+        const resolvedAssignedId = input.assignedToId || (isAdmin ? null : (user?.uid || null));
+        const resolvedAssignedEmail = input.assignedToEmail || (isAdmin ? null : (user?.email || null));
+        const resolvedAssignedName = input.assignedToName || (isAdmin ? null : (user?.displayName || (user?.email ? user.email.split('@')[0] : null)));
+
         const leadPayload = {
           ...input,
           workspaceId: targetWorkspaceId,
+          assignedToId: resolvedAssignedId,
+          assignedToName: resolvedAssignedName,
+          assignedToEmail: resolvedAssignedEmail,
           capturedBy: input.capturedBy || user?.email || (isAdmin ? 'Workspace Admin' : 'Outbound SDR'),
           capturedByUid: input.capturedByUid || user?.uid || null,
         };
@@ -462,7 +469,8 @@ export function useCRM() {
 
   const approveSequence = useCallback(
     (id: string, approverName?: string) => {
-      const approved = prototypeStore.approveSequence(id, approverName);
+      const resolvedApprover = approverName || user?.displayName || user?.email || 'Admin';
+      const approved = prototypeStore.approveSequence(id, resolvedApprover);
       if (approved) {
         refreshAll();
         // Persist to Firestore via API
@@ -471,11 +479,24 @@ export function useCRM() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(approved),
         }).catch((e) => console.warn('Firestore sync warning for sequence approval', e));
+
+        // Also persist any leads that were activated by this sequence approval
+        const activatedLeads = prototypeStore.getLeads().filter(
+          (l) => l.sequenceId === approved.id || (approved.targetLeadId && l.id === approved.targetLeadId)
+        );
+        activatedLeads.forEach((l) => {
+          fetch('/api/leads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(l),
+          }).catch((e) => console.warn('Firestore sync warning for approved lead', e));
+        });
+
         toast.success(`Sequence "${approved.name}" approved and activated!`);
       }
       return approved;
     },
-    [refreshAll]
+    [refreshAll, user]
   );
 
   const duplicateSequence = useCallback(

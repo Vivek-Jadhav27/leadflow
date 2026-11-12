@@ -59,6 +59,7 @@ export default function LeadsPage() {
   const availableTeamMembers = useMemo(() => {
     const list: TeamMember[] = [];
     const seenIds = new Set<string>();
+    const seenEmails = new Set<string>();
 
     // Helper to check if role or name indicates admin
     const isMemberAdmin = (roleStr?: string, nameStr?: string) => {
@@ -71,28 +72,62 @@ export default function LeadsPage() {
     team.forEach((m) => {
       if (!isMemberAdmin(m.role, m.name) && !seenIds.has(m.id)) {
         seenIds.add(m.id);
+        if (m.email) seenEmails.add(m.email.toLowerCase().trim());
         list.push(m);
       }
     });
 
-    // 2. Discover SDRs assigned to or who captured leads
+    // 2. If currently logged in user is not admin (SDR or AE), ensure their real name is registered
+    if (user && user.role !== 'admin') {
+      const uEmail = (user.email || '').toLowerCase().trim();
+      const existingMember = list.find((m) => m.id === user.uid || (uEmail && m.email?.toLowerCase().trim() === uEmail));
+      if (existingMember) {
+        if (user.displayName && (!existingMember.name || existingMember.name.includes('@') || existingMember.name === uEmail.split('@')[0])) {
+          existingMember.name = user.displayName;
+        }
+      } else if (!seenIds.has(user.uid)) {
+        seenIds.add(user.uid);
+        if (uEmail) seenEmails.add(uEmail);
+        list.push({
+          id: user.uid,
+          name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+          email: user.email || '',
+          role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
+          initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
+          status: 'active',
+          assignedLeadsCount: 0,
+          activeSequencesCount: 0,
+          completedTasksWeek: 0,
+        });
+      }
+    }
+
+    // 3. Discover SDRs assigned to or who captured leads
     leads.forEach((l) => {
       const sdrId = l.assignedToId || l.capturedByUid;
-      const sdrEmail = l.assignedToEmail || l.capturedBy || '';
-      const sdrName = l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : null);
+      const sdrEmail = (l.assignedToEmail || l.capturedBy || '').toLowerCase().trim();
+      if (sdrEmail && seenEmails.has(sdrEmail)) return;
+      if (sdrId && seenIds.has(sdrId)) return;
 
-      if (sdrId && !seenIds.has(sdrId)) {
-        // Exclude if this matches the current admin user
-        if (user && (user.uid === sdrId || user.email === sdrEmail) && user.role === 'admin') {
-          return;
-        }
-        seenIds.add(sdrId);
+      if (user && (user.uid === sdrId || user.email?.toLowerCase().trim() === sdrEmail) && user.role === 'admin') {
+        return;
+      }
+
+      if (sdrId || sdrEmail) {
+        const idToUse = sdrId || `rep_${sdrEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        seenIds.add(idToUse);
+        if (sdrEmail) seenEmails.add(sdrEmail);
+
+        const realName = (user && sdrEmail === user.email?.toLowerCase().trim())
+          ? (user.displayName || user.email?.split('@')[0])
+          : (l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : 'Outbound SDR'));
+
         list.push({
-          id: sdrId,
-          name: sdrName || sdrEmail.split('@')[0] || 'Outbound SDR',
+          id: idToUse,
+          name: realName,
           email: sdrEmail,
           role: 'Outbound SDR',
-          initials: (sdrName || sdrEmail || 'S').slice(0, 2).toUpperCase(),
+          initials: (realName || 'S').slice(0, 2).toUpperCase(),
           status: 'active',
           assignedLeadsCount: 0,
           activeSequencesCount: 0,
@@ -100,21 +135,6 @@ export default function LeadsPage() {
         });
       }
     });
-
-    // 3. If currently logged in user is not admin (SDR or AE), ensure they are present
-    if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
-      list.push({
-        id: user.uid,
-        name: user.displayName || (user.email ? user.email.split('@')[0] : (user.role === 'ae' ? 'Current AE' : 'Current SDR')),
-        email: user.email || '',
-        role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
-        initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
-        status: 'active',
-        assignedLeadsCount: 0,
-        activeSequencesCount: 0,
-        completedTasksWeek: 0,
-      });
-    }
 
     return list;
   }, [team, leads, user]);
@@ -925,70 +945,94 @@ export default function LeadsPage() {
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {isAdmin ? (
-                          <div className="relative inline-block text-left">
-                            <select
-                              value={lead.assignedToId || ''}
-                              onChange={(e) => {
-                                const newMemberId = e.target.value;
-                                if (!newMemberId) {
-                                  updateLead(lead.id, {
-                                    assignedToId: null,
-                                    assignedToName: null,
-                                    assignedToEmail: null,
-                                  });
-                                  toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
-                                } else {
-                                  const targetMember = availableTeamMembers.find((m) => m.id === newMemberId);
-                                  if (targetMember) {
-                                    updateLead(lead.id, {
-                                      assignedToId: targetMember.id,
-                                      assignedToName: targetMember.name,
-                                      assignedToEmail: targetMember.email,
-                                    });
-                                    toast.success(`Shifted ${lead.firstName} to ${targetMember.name}`);
-                                  }
-                                }
-                              }}
-                              className={`text-[11px] font-semibold rounded-md border px-2 py-1 pr-6 cursor-pointer transition-all focus:outline-none appearance-none bg-no-repeat bg-[right_6px_center] ${
-                                lead.assignedToName || lead.assignedToId
-                                  ? 'border-[#cbd8eb] bg-white text-[#33475b] hover:border-[#ff7a59]'
-                                  : 'border-dashed border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400'
+                        {(() => {
+                          const resolvedMember =
+                            (lead.assignedToId ? availableTeamMembers.find((m) => m.id === lead.assignedToId) : null) ||
+                            (lead.assignedToEmail ? availableTeamMembers.find((m) => m.email?.toLowerCase().trim() === lead.assignedToEmail?.toLowerCase().trim()) : null) ||
+                            (lead.capturedBy ? availableTeamMembers.find((m) => m.email?.toLowerCase().trim() === lead.capturedBy?.toLowerCase().trim()) : null) ||
+                            (lead.capturedByUid ? availableTeamMembers.find((m) => m.id === lead.capturedByUid) : null);
+
+                          const effectiveAssignedId = lead.assignedToId || resolvedMember?.id || '';
+                          const effectiveAssignedName = resolvedMember?.name || lead.assignedToName || (resolvedMember?.email ? resolvedMember.email.split('@')[0] : (lead.assignedToEmail ? lead.assignedToEmail.split('@')[0] : 'Unassigned'));
+
+                          const userEmailNorm = (user?.email || '').toLowerCase().trim();
+                          const isAssignedToUser =
+                            (user?.uid && (effectiveAssignedId === user.uid || lead.capturedByUid === user.uid)) ||
+                            (userEmailNorm && (
+                              (lead.assignedToEmail && lead.assignedToEmail.toLowerCase().trim() === userEmailNorm) ||
+                              (lead.capturedBy && lead.capturedBy.toLowerCase().trim() === userEmailNorm) ||
+                              (resolvedMember?.email && resolvedMember.email.toLowerCase().trim() === userEmailNorm)
+                            ));
+
+                          if (isAdmin) {
+                            return (
+                              <div className="relative inline-block text-left">
+                                <select
+                                  value={effectiveAssignedId}
+                                  onChange={(e) => {
+                                    const newMemberId = e.target.value;
+                                    if (!newMemberId) {
+                                      updateLead(lead.id, {
+                                        assignedToId: null,
+                                        assignedToName: null,
+                                        assignedToEmail: null,
+                                      });
+                                      toast.success(`Unassigned ${lead.firstName} ${lead.lastName}`);
+                                    } else {
+                                      const targetMember = availableTeamMembers.find((m) => m.id === newMemberId);
+                                      if (targetMember) {
+                                        updateLead(lead.id, {
+                                          assignedToId: targetMember.id,
+                                          assignedToName: targetMember.name,
+                                          assignedToEmail: targetMember.email,
+                                        });
+                                        toast.success(`Shifted ${lead.firstName} to ${targetMember.name}`);
+                                      }
+                                    }
+                                  }}
+                                  className={`text-[11px] font-semibold rounded-md border px-2 py-1 pr-6 cursor-pointer transition-all focus:outline-none appearance-none bg-no-repeat bg-[right_6px_center] ${
+                                    effectiveAssignedId
+                                      ? 'border-[#cbd8eb] bg-white text-[#33475b] hover:border-[#ff7a59]'
+                                      : 'border-dashed border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400'
+                                  }`}
+                                  style={{
+                                    backgroundImage: `url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%237c98b6%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E")`,
+                                  }}
+                                  title="Click to shift / assign SDR"
+                                >
+                                  <option value="">Unassigned (Assign SDR)</option>
+                                  {effectiveAssignedId && !availableTeamMembers.some((m) => m.id === effectiveAssignedId) && (
+                                    <option key={effectiveAssignedId} value={effectiveAssignedId}>
+                                      {effectiveAssignedName} (SDR)
+                                    </option>
+                                  )}
+                                  {availableTeamMembers.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                      {m.name} ({m.role || 'SDR'})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1 text-[11px] ${
+                                isAssignedToUser
+                                  ? 'font-bold text-[#ff7a59]'
+                                  : 'font-medium text-[#516f90]'
                               }`}
-                              style={{
-                                backgroundImage: `url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%237c98b6%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E")`,
-                              }}
-                              title="Click to shift / assign SDR"
                             >
-                              <option value="">Unassigned (Assign SDR)</option>
-                              {lead.assignedToId && !availableTeamMembers.some((m) => m.id === lead.assignedToId) && (
-                                <option key={lead.assignedToId} value={lead.assignedToId}>
-                                  {lead.assignedToName || lead.assignedToEmail || 'Assigned SDR'} (SDR)
-                                </option>
+                              {effectiveAssignedName}
+                              {isAssignedToUser && (
+                                <span className="rounded bg-[#ff7a59]/10 px-1.5 py-0.2 text-[9px] font-bold text-[#ff7a59]">
+                                  You
+                                </span>
                               )}
-                              {availableTeamMembers.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {m.name} ({m.role || 'SDR'})
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        ) : (
-                          <span
-                            className={`inline-flex items-center gap-1 text-[11px] ${
-                              lead.assignedToId === user?.uid
-                                ? 'font-bold text-[#ff7a59]'
-                                : 'font-medium text-[#516f90]'
-                            }`}
-                          >
-                            {lead.assignedToName || (lead.assignedToEmail ? lead.assignedToEmail.split('@')[0] : 'Unassigned')}
-                            {lead.assignedToId === user?.uid && (
-                              <span className="rounded bg-[#ff7a59]/10 px-1.5 py-0.2 text-[9px] font-bold text-[#ff7a59]">
-                                You
-                              </span>
-                            )}
-                          </span>
-                        )}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">

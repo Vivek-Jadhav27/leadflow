@@ -514,7 +514,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
     } else {
       const note = customConnNote ? customConnNote.value.trim() : '';
-      const finishLater = chkFinishCadenceLater ? chkFinishCadenceLater.checked : true;
+      const hasCustomFollowUps = Boolean(customStep2Msg?.value.trim() || customStep3Msg?.value.trim());
+      const finishLater = chkFinishCadenceLater ? (chkFinishCadenceLater.checked && !hasCustomFollowUps) : !hasCustomFollowUps;
       const customSteps = !finishLater ? [
         {
           stepNumber: 1,
@@ -551,6 +552,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
     }
 
+    const userDisplayName = lfUser?.displayName || lfUser?.name || (lfUser?.email ? lfUser.email.split('@')[0] : 'Outbound SDR');
+    const userUid = lfUser?.uid || lfUser?.id || null;
+    const userEmail = lfUser?.email || '';
+
     const leadPayload = {
       firstName:   firstNameEl.value.trim(),
       lastName:    lastNameEl.value.trim(),
@@ -559,8 +564,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       linkedinUrl: linkedinUrlEl.value.trim(),
       source:      'linkedin_extension',
       status:      'NEW',
-      capturedBy:  lfUser?.email || '',
-      workspaceId: lfUser?.workspaceId || '',
+      channel:     'linkedin',
+      capturedBy:      userEmail,
+      capturedByUid:   userUid,
+      assignedToId:    userUid,
+      assignedToName:  userDisplayName,
+      assignedToEmail: userEmail,
+      workspaceId:     lfUser?.workspaceId || '',
       ...sequencePayload,
     };
 

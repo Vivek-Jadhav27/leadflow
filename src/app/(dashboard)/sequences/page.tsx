@@ -251,24 +251,27 @@ export default function SequencesPage() {
           const activeLeadsForSeq = leads.filter(
             (l) => l.sequenceId === seq.id && l.disposition !== 'archived'
           );
-          const targetLead =
-            activeLeadsForSeq[0] ||
-            (seq.targetLeadId ? leads.find((l) => l.id === seq.targetLeadId) : null) ||
-            leads.find((l) => seq.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)) ||
-            leads.find((l) => seq.name.toLowerCase().includes(l.firstName.toLowerCase()) && seq.name.toLowerCase().includes(l.lastName.toLowerCase()));
 
           const isCustom = Boolean(
             seq.isCustom ||
             seq.id.startsWith('seq_custom_') ||
-            seq.name.toLowerCase().includes('custom cadence') ||
-            seq.description?.toLowerCase().includes('bespoke') ||
-            targetLead
+            Boolean(seq.targetLeadId) ||
+            seq.name.toLowerCase().startsWith('custom cadence') ||
+            seq.name.toLowerCase().includes('custom cadence:') ||
+            (seq.description && seq.description.toLowerCase().includes('bespoke 1:1'))
           );
+
+          const targetLead = isCustom
+            ? (seq.targetLeadId ? leads.find((l) => l.id === seq.targetLeadId) : null) ||
+              leads.find((l) => seq.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)) ||
+              leads.find((l) => seq.name.toLowerCase().includes(l.firstName.toLowerCase()) && seq.name.toLowerCase().includes(l.lastName.toLowerCase())) ||
+              activeLeadsForSeq[0]
+            : null;
 
           const parsedProspectName = targetLead
             ? `${targetLead.firstName} ${targetLead.lastName}`
-            : (seq.targetLeadName || seq.name.replace(/^custom cadence:\s*/i, '').trim());
-          const parsedCompany = targetLead?.company || seq.targetLeadCompany || (seq.description?.match(/at\s+([^.]+)/i)?.[1]?.trim());
+            : (seq.targetLeadName || (isCustom ? seq.name.replace(/^custom cadence:\s*/i, '').trim() : null));
+          const parsedCompany = targetLead?.company || seq.targetLeadCompany || (isCustom ? seq.description?.match(/at\s+([^.]+)/i)?.[1]?.trim() : null);
           const parsedLinkedin = targetLead?.linkedinUrl || seq.targetLeadLinkedin;
           const isApproved = seq.approvalStatus === 'approved';
 
@@ -315,11 +318,39 @@ export default function SequencesPage() {
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-200">
                         1:1 Bespoke Cadence
                       </span>
+
+                      {/* Creator badge */}
                       <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 bg-slate-50 border border-slate-200">
-                        {seq.createdByUid === user?.uid || seq.createdBy?.toLowerCase().trim() === user?.email?.toLowerCase().trim()
-                          ? 'Created by You (SDR)'
-                          : `Created by ${seq.createdBy?.split('@')[0] || 'SDR'}`}
+                        {(() => {
+                          const isCurrentUser =
+                            (user?.uid && seq.createdByUid === user.uid) ||
+                            (user?.email && seq.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
+                          if (isCurrentUser) {
+                            return user?.role === 'admin' ? 'Created by You (Admin)' : 'Created by You (SDR)';
+                          }
+                          const roleLabel = seq.createdByRole ? ` (${seq.createdByRole.toUpperCase()})` : '';
+                          const authorName = seq.createdBy ? seq.createdBy.split('@')[0] : 'SDR';
+                          return `Created by ${authorName}${roleLabel}`;
+                        })()}
                       </span>
+
+                      {/* Approval badge */}
+                      {isApproved && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">
+                          {(() => {
+                            if (seq.approvedBy) {
+                              const isCurrentApprover =
+                                (user?.email && seq.approvedBy.toLowerCase().trim() === user.email.toLowerCase().trim()) ||
+                                (user?.displayName && seq.approvedBy.toLowerCase().trim() === user.displayName.toLowerCase().trim()) ||
+                                (isAdmin && seq.approvedBy === 'Workspace Admin');
+                              return isCurrentApprover
+                                ? 'Approved by You (Admin)'
+                                : `Approved by ${seq.approvedBy.split('@')[0]}`;
+                            }
+                            return 'Approved by Admin';
+                          })()}
+                        </span>
+                      )}
                     </>
                   ) : (
                     <>
@@ -334,12 +365,25 @@ export default function SequencesPage() {
                       </span>
 
                       <span className="px-2 py-0.5 rounded text-[10px] text-slate-500 bg-slate-50 border border-slate-200">
-                        {seq.createdByUid === user?.uid || seq.createdBy?.toLowerCase().trim() === user?.email?.toLowerCase().trim()
-                          ? 'Created by You'
-                          : (seq.createdByRole === 'admin' || seq.createdBy === 'Workspace Admin'
-                            ? 'Admin Cadence'
-                            : `By ${seq.createdBy?.split('@')[0] || 'Member'}`)}
+                        {(() => {
+                          const isCurrentUser =
+                            (user?.uid && seq.createdByUid === user.uid) ||
+                            (user?.email && seq.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
+                          if (isCurrentUser) {
+                            return user?.role === 'admin' ? 'Created by You (Admin)' : 'Created by You (SDR)';
+                          }
+                          if (seq.createdByRole === 'admin' || seq.createdBy === 'Workspace Admin' || seq.createdBy?.toLowerCase().includes('admin')) {
+                            return 'Admin Cadence';
+                          }
+                          return `By ${seq.createdBy ? seq.createdBy.split('@')[0] : 'Member'}`;
+                        })()}
                       </span>
+
+                      {isApproved && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">
+                          Approved
+                        </span>
+                      )}
                     </>
                   )}
                 </div>

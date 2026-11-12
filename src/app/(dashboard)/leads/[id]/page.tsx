@@ -271,6 +271,32 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     return null;
   }, [lead, sequences, connectionNoteSent]);
 
+  // Sequence approval and active status resolution
+  const isSeqApproved = Boolean(sequence && (sequence.approvalStatus === 'approved' || sequence.status === 'active'));
+  const effectiveOutreachStatus = (isSeqApproved && lead?.outreachStatus === 'pending_sequence_approval')
+    ? 'in_sequence'
+    : (lead?.outreachStatus || 'unassigned');
+
+  // Auto-heal: If cadence is already approved by Admin, transition lead to in_sequence immediately
+  React.useEffect(() => {
+    if (
+      lead &&
+      sequence &&
+      (sequence.approvalStatus === 'approved' || sequence.status === 'active') &&
+      lead.outreachStatus === 'pending_sequence_approval'
+    ) {
+      const step2 = sequence.steps?.[1] || sequence.steps?.find((s) => s.stepNumber === 2);
+      updateLead(lead.id, {
+        sequenceId: sequence.id,
+        sequenceName: sequence.name,
+        outreachStatus: 'in_sequence',
+        currentStepNumber: lead.currentStepNumber > 1 ? lead.currentStepNumber : 2,
+        nextActionTitle: step2?.title || 'Step 2: Follow-up 1',
+        nextFollowUpDate: lead.nextFollowUpDate || new Date().toISOString().split('T')[0],
+      });
+    }
+  }, [lead?.id, lead?.outreachStatus, sequence?.id, sequence?.approvalStatus, sequence?.status, updateLead]);
+
   // Handle Admin changing sequence start date
   const handleRescheduleStartDate = (newDate: string) => {
     if (!lead || !newDate || newDate === lead.nextFollowUpDate) return;
@@ -306,6 +332,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const availableTeamMembers = React.useMemo(() => {
     const list: typeof team = [];
     const seenIds = new Set<string>();
+    const seenEmails = new Set<string>();
 
     const isMemberAdmin = (roleStr?: string, nameStr?: string) => {
       const r = (roleStr || '').toLowerCase();
@@ -316,26 +343,60 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     team.forEach((m) => {
       if (!isMemberAdmin(m.role, m.name) && !seenIds.has(m.id)) {
         seenIds.add(m.id);
+        if (m.email) seenEmails.add(m.email.toLowerCase().trim());
         list.push(m);
       }
     });
 
+    if (user && user.role !== 'admin') {
+      const uEmail = (user.email || '').toLowerCase().trim();
+      const existingMember = list.find((m) => m.id === user.uid || (uEmail && m.email?.toLowerCase().trim() === uEmail));
+      if (existingMember) {
+        if (user.displayName && (!existingMember.name || existingMember.name.includes('@') || existingMember.name === uEmail.split('@')[0])) {
+          existingMember.name = user.displayName;
+        }
+      } else if (!seenIds.has(user.uid)) {
+        seenIds.add(user.uid);
+        if (uEmail) seenEmails.add(uEmail);
+        list.push({
+          id: user.uid,
+          name: user.displayName || (user.email ? user.email.split('@')[0] : 'Current SDR'),
+          email: user.email || '',
+          role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
+          initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
+          status: 'active',
+          assignedLeadsCount: 0,
+          activeSequencesCount: 0,
+          completedTasksWeek: 0,
+        });
+      }
+    }
+
     leads.forEach((l) => {
       const sdrId = l.assignedToId || l.capturedByUid;
-      const sdrEmail = l.assignedToEmail || l.capturedBy || '';
-      const sdrName = l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : null);
+      const sdrEmail = (l.assignedToEmail || l.capturedBy || '').toLowerCase().trim();
+      if (sdrEmail && seenEmails.has(sdrEmail)) return;
+      if (sdrId && seenIds.has(sdrId)) return;
 
-      if (sdrId && !seenIds.has(sdrId)) {
-        if (user && (user.uid === sdrId || user.email === sdrEmail) && user.role === 'admin') {
-          return;
-        }
-        seenIds.add(sdrId);
+      if (user && (user.uid === sdrId || user.email?.toLowerCase().trim() === sdrEmail) && user.role === 'admin') {
+        return;
+      }
+
+      if (sdrId || sdrEmail) {
+        const idToUse = sdrId || `rep_${sdrEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        seenIds.add(idToUse);
+        if (sdrEmail) seenEmails.add(sdrEmail);
+
+        const realName = (user && sdrEmail === user.email?.toLowerCase().trim())
+          ? (user.displayName || user.email?.split('@')[0])
+          : (l.assignedToName || (sdrEmail ? sdrEmail.split('@')[0] : 'Outbound SDR'));
+
         list.push({
-          id: sdrId,
-          name: sdrName || sdrEmail.split('@')[0] || 'Outbound SDR',
+          id: idToUse,
+          name: realName,
           email: sdrEmail,
           role: 'Outbound SDR',
-          initials: (sdrName || sdrEmail || 'S').slice(0, 2).toUpperCase(),
+          initials: (realName || 'S').slice(0, 2).toUpperCase(),
           status: 'active',
           assignedLeadsCount: 0,
           activeSequencesCount: 0,
@@ -344,22 +405,17 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
       }
     });
 
-    if (user && user.role !== 'admin' && !seenIds.has(user.uid)) {
-      list.push({
-        id: user.uid,
-        name: user.displayName || (user.email ? user.email.split('@')[0] : (user.role === 'ae' ? 'Current AE' : 'Current SDR')),
-        email: user.email || '',
-        role: user.role === 'ae' ? 'Account Executive' : 'Outbound SDR',
-        initials: (user.displayName || user.email || 'U').slice(0, 2).toUpperCase(),
-        status: 'active',
-        assignedLeadsCount: 0,
-        activeSequencesCount: 0,
-        completedTasksWeek: 0,
-      });
-    }
-
     return list;
   }, [team, leads, user]);
+
+  const resolvedMember =
+    (lead?.assignedToId ? availableTeamMembers.find((m) => m.id === lead.assignedToId) : null) ||
+    (lead?.assignedToEmail ? availableTeamMembers.find((m) => m.email?.toLowerCase().trim() === lead.assignedToEmail?.toLowerCase().trim()) : null) ||
+    (lead?.capturedBy ? availableTeamMembers.find((m) => m.email?.toLowerCase().trim() === lead.capturedBy?.toLowerCase().trim()) : null) ||
+    (lead?.capturedByUid ? availableTeamMembers.find((m) => m.id === lead.capturedByUid) : null);
+
+  const effectiveAssignedId = lead?.assignedToId || resolvedMember?.id || '';
+  const effectiveAssignedName = resolvedMember?.name || lead?.assignedToName || (resolvedMember?.email ? resolvedMember.email.split('@')[0] : (lead?.assignedToEmail ? lead.assignedToEmail.split('@')[0] : 'Unassigned'));
 
   // Compute scheduled calendar dates for each step in the sequence
   const stepScheduleMap = React.useMemo(() => {
@@ -921,7 +977,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
             <div className="flex items-center gap-1.5 border-l border-[#cbd6e2] pl-3">
               <span className="text-slate-500 text-[11px]">SDR Owner:</span>
-              <span className="font-bold text-[#33475b]">{lead.assignedToName}</span>
+              <span className="font-bold text-[#33475b]">{effectiveAssignedName}</span>
             </div>
           </div>
         </div>
@@ -1143,7 +1199,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     Assigned Representative (SDR)
                   </span>
                   <select
-                    value={lead.assignedToId || ''}
+                    value={effectiveAssignedId}
                     onChange={(e) => {
                       const newId = e.target.value;
                       if (!newId) {
@@ -1168,9 +1224,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     className="w-full rounded-md border border-[#cbd8eb] px-2.5 py-1.5 text-xs bg-white text-[#33475b] font-medium focus:border-[#ff7a59] focus:outline-none"
                   >
                     <option value="">Unassigned (Click to Assign)</option>
-                    {lead.assignedToId && !availableTeamMembers.some((m) => m.id === lead.assignedToId) && (
-                      <option key={lead.assignedToId} value={lead.assignedToId}>
-                        {lead.assignedToName || lead.assignedToEmail || 'Assigned SDR'} (SDR)
+                    {effectiveAssignedId && !availableTeamMembers.some((m) => m.id === effectiveAssignedId) && (
+                      <option key={effectiveAssignedId} value={effectiveAssignedId}>
+                        {effectiveAssignedName} (SDR)
                       </option>
                     )}
                     {availableTeamMembers.map((m) => (
@@ -1244,7 +1300,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 <div className="p-2.5 rounded bg-[#f5f8fa] border border-[#dfe3eb]">
                   <p className="text-[10px] uppercase font-bold text-slate-400">Outreach Status</p>
                   <p className="font-bold text-[#33475b] capitalize mt-0.5">
-                    {lead.outreachStatus.replace('_', ' ')}
+                    {effectiveOutreachStatus.replace('_', ' ')}
                   </p>
                 </div>
 
@@ -1308,7 +1364,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
 
               {/* Pending Sequence Approval Banner */}
-              {(lead.outreachStatus === 'pending_sequence_approval' || (sequence && sequence.approvalStatus === 'pending')) && (
+              {(!isSeqApproved && (lead.outreachStatus === 'pending_sequence_approval' || (sequence && sequence.approvalStatus === 'pending'))) && (
                 <div className="rounded-lg border border-blue-300 bg-blue-50 p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -1419,7 +1475,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                           />
                         </div>
                       )}
-                      {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && lead.outreachStatus !== 'pending_sequence_approval' && (
+                      {lead.outreachStatus !== 'completed' && lead.outreachStatus !== 'replied' && effectiveOutreachStatus !== 'pending_sequence_approval' && (
                         <Button
                           size="sm"
                           onClick={handleAdvanceStep}
@@ -1496,7 +1552,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
                                   {/* Scheduled Date Badge */}
                                   <div className="flex items-center gap-1.5 shrink-0">
-                                    {lead.outreachStatus === 'pending_sequence_approval' ? (
+                                    {effectiveOutreachStatus === 'pending_sequence_approval' ? (
                                       <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 border border-amber-200">
                                         <Clock className="h-3 w-3 text-amber-600" />
                                         <span>Pending Admin Approval</span>

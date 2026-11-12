@@ -167,16 +167,29 @@ export async function GET(req: NextRequest) {
     const merged = Array.from(leadMap.values());
 
     // Role-based Access Control & Strict Workspace Scoping:
+    // Normalize representative fields on all leads before caching & response
+    const finalLeads = merged.map((l: any) => {
+      const assignedId = l.assignedToId || l.capturedByUid || null;
+      const assignedEmail = l.assignedToEmail || l.capturedBy || null;
+      const assignedName = l.assignedToName || (assignedEmail ? assignedEmail.split('@')[0] : 'Unassigned');
+      return {
+        ...l,
+        assignedToId: assignedId,
+        assignedToEmail: assignedEmail,
+        assignedToName: assignedName,
+      };
+    });
+
     // 1. Leads must match the active workspace (if resolved)
-    let finalLeads = resolvedWorkspaceId
-      ? merged.filter((l) => l.workspaceId === resolvedWorkspaceId)
-      : merged;
+    let finalLeadsFiltered = resolvedWorkspaceId
+      ? finalLeads.filter((l: any) => l.workspaceId === resolvedWorkspaceId)
+      : finalLeads;
 
     if (authContext) {
       if (authContext.role !== 'admin') {
         const userUid = authContext.uid;
         const userEmail = (authContext.email || '').toLowerCase().trim();
-        finalLeads = finalLeads.filter((l) => {
+        finalLeadsFiltered = finalLeadsFiltered.filter((l: any) => {
           const assignedEmail = (l.assignedToEmail || '').toLowerCase().trim();
           const capturedEmail = (l.capturedBy || '').toLowerCase().trim();
           return (
@@ -190,16 +203,16 @@ export async function GET(req: NextRequest) {
     }
 
     leadsServerCache.set(cacheKey, {
-      leads: finalLeads,
-      count: finalLeads.length,
+      leads: finalLeadsFiltered,
+      count: finalLeadsFiltered.length,
       cachedAt: Date.now(),
     });
 
     return NextResponse.json(
       {
         success: true,
-        count: finalLeads.length,
-        leads: finalLeads,
+        count: finalLeadsFiltered.length,
+        leads: finalLeadsFiltered,
       },
       {
         status: 200,
@@ -378,10 +391,10 @@ export async function POST(req: NextRequest) {
       disposition: body.disposition || existingDocData?.disposition || 'active',
       notes: body.notes || (resolvedConnNote ? `Connection note: ${resolvedConnNote}` : (existingDocData?.notes || 'Added to LeadFlow pipeline')),
       capturedBy: capturedBy || existingDocData?.capturedBy,
-      capturedByUid: capturedByUid || existingDocData?.capturedByUid,
-      assignedToId: body.assignedToId || existingDocData?.assignedToId || (capturedByUid ? capturedByUid : null),
-      assignedToName: body.assignedToName || existingDocData?.assignedToName || (capturedBy ? capturedBy.split('@')[0] : null),
-      assignedToEmail: body.assignedToEmail || existingDocData?.assignedToEmail || (capturedBy ? capturedBy : null),
+      capturedByUid: capturedByUid || body.assignedToId || existingDocData?.capturedByUid,
+      assignedToId: body.assignedToId || existingDocData?.assignedToId || capturedByUid || null,
+      assignedToName: body.assignedToName || existingDocData?.assignedToName || (capturedBy ? capturedBy.split('@')[0] : 'Outbound SDR'),
+      assignedToEmail: body.assignedToEmail || existingDocData?.assignedToEmail || capturedBy || null,
       workspaceId: resolvedWorkspaceId || existingDocData?.workspaceId || 'default_workspace',
       nextFollowUpDate: body.nextFollowUpDate || existingDocData?.nextFollowUpDate || defaultFollowUp,
       nextActionTitle: body.nextActionTitle || defaultActionTitle,

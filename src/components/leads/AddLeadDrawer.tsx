@@ -163,6 +163,8 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
         assignedToId: finalAssigneeId,
         assignedToName: finalAssigneeName,
         assignedToEmail: finalAssigneeEmail,
+        capturedBy: user?.email || null,
+        capturedByUid: user?.uid || null,
         workspaceId: currentWorkspaceId,
       });
     }

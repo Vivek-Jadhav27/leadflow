@@ -266,6 +266,20 @@ export async function POST(req: NextRequest) {
 
     const now = new Date().toISOString();
     const seqId = body.id || `seq_${Date.now()}`;
+
+    // Preserve original creator metadata if already set or existing
+    const currentSequences = getStoredSequences();
+    const existingIndex = currentSequences.findIndex((s) => s.id === seqId);
+    const existingSeq = existingIndex >= 0 ? currentSequences[existingIndex] : null;
+
+    const originalCreatedBy = body.createdBy || existingSeq?.createdBy || author;
+    const originalCreatedByUid = body.createdByUid || existingSeq?.createdByUid || authorUid;
+    const originalCreatedByRole = body.createdByRole || existingSeq?.createdByRole || 'sdr';
+
+    const isApproved = body.approvalStatus === 'approved' || body.status === 'active';
+    const approvedBy = body.approvedBy || (isApproved ? (existingSeq?.approvedBy || author) : null);
+    const approvedAt = body.approvedAt || (isApproved ? (existingSeq?.approvedAt || now) : null);
+
     const sequenceData = {
       id: seqId,
       name: body.name.trim(),
@@ -273,22 +287,26 @@ export async function POST(req: NextRequest) {
       description: body.description || 'LinkedIn multi-step outbound cadence',
       steps: body.steps || [],
       status: body.status || 'active',
-      approvalStatus: body.approvalStatus || 'approved',
-      approvedBy: body.approvedBy || author,
-      approvedAt: body.approvedAt || now,
-      workspaceId: resolvedWorkspaceId || 'default_workspace',
-      createdBy: author,
-      createdByUid: authorUid,
-      createdByRole: body.createdByRole || 'admin',
-      targetRole: body.targetRole || 'all',
-      enrolledLeadsCount: body.enrolledLeadsCount || 0,
-      createdAt: body.createdAt || now,
+      approvalStatus: body.approvalStatus || (isApproved ? 'approved' : 'pending'),
+      approvedBy,
+      approvedAt,
+      workspaceId: resolvedWorkspaceId || existingSeq?.workspaceId || 'default_workspace',
+      createdBy: originalCreatedBy,
+      createdByUid: originalCreatedByUid,
+      createdByRole: originalCreatedByRole,
+      targetRole: body.targetRole || existingSeq?.targetRole || 'all',
+      isCustom: Boolean(body.isCustom || existingSeq?.isCustom || seqId.startsWith('seq_custom_')),
+      targetLeadId: body.targetLeadId || existingSeq?.targetLeadId || null,
+      targetLeadName: body.targetLeadName || existingSeq?.targetLeadName || null,
+      targetLeadCompany: body.targetLeadCompany || existingSeq?.targetLeadCompany || null,
+      targetLeadLinkedin: body.targetLeadLinkedin || existingSeq?.targetLeadLinkedin || null,
+      enrolledLeadsCount: body.enrolledLeadsCount || existingSeq?.enrolledLeadsCount || 0,
+      createdAt: body.createdAt || existingSeq?.createdAt || now,
       updatedAt: now,
+      updatedBy: author,
     };
 
     // 1. Save to local fallback storage
-    const currentSequences = getStoredSequences();
-    const existingIndex = currentSequences.findIndex((s) => s.id === seqId);
     if (existingIndex >= 0) {
       currentSequences[existingIndex] = { ...currentSequences[existingIndex], ...sequenceData };
     } else {
@@ -300,6 +318,39 @@ export async function POST(req: NextRequest) {
     if (isAdminReady && adminDb) {
       try {
         await adminDb.collection('sequences').doc(seqId).set(sequenceData, { merge: true });
+
+        // If sequence was approved, activate matching leads in Firestore
+        if (isApproved) {
+          try {
+            let leadsToActivate: any[] = [];
+            if (sequenceData.targetLeadId) {
+              const leadDoc = await adminDb.collection('leads').doc(sequenceData.targetLeadId).get();
+              if (leadDoc.exists) {
+                leadsToActivate.push({ id: leadDoc.id, ...leadDoc.data() });
+              }
+            } else {
+              const qSnap = await adminDb.collection('leads').where('sequenceId', '==', seqId).limit(10).get();
+              qSnap.forEach((d: any) => leadsToActivate.push({ id: d.id, ...d.data() }));
+            }
+
+            for (const l of leadsToActivate) {
+              if (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence') {
+                const step2Title = sequenceData.steps?.[1]?.title || 'Step 2: Follow-up 1';
+                const delay = sequenceData.steps?.[1]?.delayDays || 3;
+                const nextFollowUp = new Date(Date.now() + delay * 86400000).toISOString().split('T')[0];
+                await adminDb.collection('leads').doc(l.id).set({
+                  outreachStatus: 'in_sequence',
+                  currentStepNumber: 2,
+                  nextActionTitle: step2Title,
+                  nextFollowUpDate: l.nextFollowUpDate || nextFollowUp,
+                  updatedAt: now,
+                }, { merge: true });
+              }
+            }
+          } catch (leadActErr) {
+            console.warn('[API /sequences POST] Lead activation warning:', leadActErr);
+          }
+        }
       } catch (fsErr) {
         console.warn('[API /sequences POST] Firestore sequence write warning (quota/network):', (fsErr as any)?.message || fsErr);
       }
