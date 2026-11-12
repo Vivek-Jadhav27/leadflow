@@ -70,8 +70,11 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get('workspaceId');
     const limitParam = req.nextUrl.searchParams.get('limit');
     const parsedLimit = limitParam ? parseInt(limitParam, 10) : 0;
+    const filterParam = req.nextUrl.searchParams.get('filter');
+    const dueTodayParam = req.nextUrl.searchParams.get('dueToday');
+    const isDueToday = dueTodayParam === 'true' || filterParam === 'today';
 
-    const cacheKey = `${workspaceIdParam || 'all'}_limit_${parsedLimit || 'all'}`;
+    const cacheKey = `${workspaceIdParam || 'all'}_limit_${parsedLimit || 'all'}_due_${isDueToday ? '1' : '0'}`;
     const cached = leadsServerCache.get(cacheKey);
     const nowTs = Date.now();
 
@@ -189,6 +192,19 @@ export async function GET(req: NextRequest) {
     let finalLeadsFiltered = resolvedWorkspaceId
       ? finalLeads.filter((l: any) => l.workspaceId === resolvedWorkspaceId)
       : finalLeads;
+
+    // Filter to only today's outreach cadence leads if requested
+    if (isDueToday) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      finalLeadsFiltered = finalLeadsFiltered.filter((l: any) => {
+        if (l.disposition === 'archived') return false;
+        const isNeedsSeq = l.outreachStatus === 'needs_sequence';
+        const isFollowup = l.outreachStatus === 'followup_due';
+        const isInSeq = l.outreachStatus === 'in_sequence';
+        const isDueTodayOrOverdue = Boolean(l.nextFollowUpDate && l.nextFollowUpDate <= todayStr);
+        return isNeedsSeq || isFollowup || isInSeq || isDueTodayOrOverdue;
+      });
+    }
 
     if (authContext) {
       if (authContext.role !== 'admin') {

@@ -69,12 +69,42 @@ export function useCRM() {
       inflightCloudSyncPromise = (async () => {
         try {
           const headers: Record<string, string> = {};
+          if (currentWorkspaceId) {
+            headers['x-workspace-id'] = currentWorkspaceId;
+          }
+
+          // Optimized Dashboard Mode: Fetch a single consolidated API call
+          // containing only today's outreach cadence leads instead of 3 separate calls
+          const isDashboard =
+            typeof window !== 'undefined' &&
+            (window.location.pathname === '/dashboard' || window.location.pathname === '/');
+
+          if (isDashboard) {
+            const dashUrl = currentWorkspaceId
+              ? `/api/dashboard?workspaceId=${encodeURIComponent(currentWorkspaceId)}`
+              : '/api/dashboard';
+            const dashRes = await fetch(dashUrl, { headers });
+            if (dashRes.ok) {
+              const data = await dashRes.json().catch(() => ({}));
+              if (data.todayLeads && Array.isArray(data.todayLeads)) {
+                prototypeStore.syncIncomingLeads(data.todayLeads, currentWorkspaceId || undefined);
+              }
+              if (data.sequences && Array.isArray(data.sequences)) {
+                prototypeStore.syncIncomingSequences(data.sequences, currentWorkspaceId || undefined);
+              }
+              if (data.team && Array.isArray(data.team)) {
+                prototypeStore.syncIncomingTeam(data.team);
+              }
+              lastCloudSyncTimestamp = Date.now();
+              return;
+            }
+          }
+
           let leadsUrl = '/api/leads';
           let seqUrl = '/api/sequences';
           let teamUrl = '/api/team';
 
           if (currentWorkspaceId) {
-            headers['x-workspace-id'] = currentWorkspaceId;
             leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}&limit=50`;
             seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
             teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
