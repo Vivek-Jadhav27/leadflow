@@ -5,6 +5,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateServerRequest } from '@/lib/serverAuth';
 import { adminDb } from '@/lib/firebaseAdmin';
 
+interface CachedWsResult {
+  payload: any;
+  cachedAt: number;
+}
+const wsServerCache = new Map<string, CachedWsResult>();
+const WS_CACHE_TTL_MS = 60 * 1000;
+
 export async function GET(req: NextRequest) {
   try {
     const context = await authenticateServerRequest(req);
@@ -13,6 +20,14 @@ export async function GET(req: NextRequest) {
     }
 
     const { workspaceId, role, uid } = context;
+
+    // Check server memory cache first
+    const cacheKey = `${workspaceId}_${uid}`;
+    const cached = wsServerCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.cachedAt < WS_CACHE_TTL_MS) {
+      return NextResponse.json({ ...cached.payload, fromCache: true });
+    }
 
     let wsData: any = null;
     let membersCount = 1;
@@ -42,27 +57,31 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Workspace is suspended or inactive.' }, { status: 403 });
     }
 
-    // Try counting stats, safely falling back if quota exceeded
+    // Use Firestore count() aggregation queries (0 document reads, charges 1 aggregation read per 1,000 matches)
     try {
-      const membersSnap = await adminDb
-        .collection('workspaces')
-        .doc(workspaceId)
-        .collection('members')
-        .where('status', '==', 'active')
-        .get();
-      membersCount = membersSnap.size;
+      const [membersSnap, leadsSnap, sequencesSnap] = await Promise.all([
+        adminDb
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('members')
+          .where('status', '==', 'active')
+          .count()
+          .get(),
+        adminDb
+          .collection('leads')
+          .where('workspaceId', '==', workspaceId)
+          .count()
+          .get(),
+        adminDb
+          .collection('sequences')
+          .where('workspaceId', '==', workspaceId)
+          .count()
+          .get(),
+      ]);
 
-      const leadsSnap = await adminDb
-        .collection('leads')
-        .where('workspaceId', '==', workspaceId)
-        .get();
-      leadsCount = leadsSnap.size;
-
-      const sequencesSnap = await adminDb
-        .collection('sequences')
-        .where('workspaceId', '==', workspaceId)
-        .get();
-      sequencesCount = sequencesSnap.size;
+      membersCount = membersSnap.data().count;
+      leadsCount = leadsSnap.data().count;
+      sequencesCount = sequencesSnap.data().count;
     } catch {
       // Quota exceeded - use standard estimates
       membersCount = 3;
@@ -70,7 +89,7 @@ export async function GET(req: NextRequest) {
       sequencesCount = 3;
     }
 
-    return NextResponse.json({
+    const responsePayload = {
       workspaceId,
       companyName: wsData.companyName || 'LeadFlow Workspace',
       companyLinkedinUrl: wsData.companyLinkedinUrl || '',
@@ -83,10 +102,17 @@ export async function GET(req: NextRequest) {
         leadsCount: leadsCount,
         sequencesCount: sequencesCount,
       },
+    };
+
+    // Cache the workspace payload in memory
+    wsServerCache.set(cacheKey, {
+      payload: responsePayload,
+      cachedAt: now,
     });
+
+    return NextResponse.json(responsePayload);
   } catch (error) {
     console.error('[CurrentWorkspace] Error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
-

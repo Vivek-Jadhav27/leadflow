@@ -75,7 +75,7 @@ export function useCRM() {
 
           if (currentWorkspaceId) {
             headers['x-workspace-id'] = currentWorkspaceId;
-            leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
+            leadsUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}&limit=50`;
             seqUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
             teamUrl += `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`;
           }

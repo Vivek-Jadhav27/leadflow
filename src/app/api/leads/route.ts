@@ -68,8 +68,10 @@ export async function GET(req: NextRequest) {
     const workspaceIdParam =
       req.headers.get('x-workspace-id') ||
       req.nextUrl.searchParams.get('workspaceId');
+    const limitParam = req.nextUrl.searchParams.get('limit');
+    const parsedLimit = limitParam ? parseInt(limitParam, 10) : 0;
 
-    const cacheKey = workspaceIdParam || 'all';
+    const cacheKey = `${workspaceIdParam || 'all'}_limit_${parsedLimit || 'all'}`;
     const cached = leadsServerCache.get(cacheKey);
     const nowTs = Date.now();
 
@@ -105,6 +107,9 @@ export async function GET(req: NextRequest) {
         let q: any = adminDb.collection('leads');
         if (resolvedWorkspaceId) {
           q = q.where('workspaceId', '==', resolvedWorkspaceId);
+        }
+        if (parsedLimit > 0) {
+          q = q.limit(parsedLimit);
         }
         const snap = await q.get();
         if (!snap.empty) {

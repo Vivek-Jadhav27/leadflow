@@ -14,6 +14,8 @@ import {
   Copy,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ArrowUpDown,
   UserCheck,
   Eye,
@@ -253,11 +255,31 @@ export default function LeadsPage() {
       });
   }, [leads, viewArchived, connectionFilter, statusFilter, sequenceFilter, ownerFilter, searchQuery, sortBy, sortOrder]);
 
+  // Pagination (25 leads per page batch)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  // Reset to first page when search or filters change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, connectionFilter, statusFilter, sequenceFilter, ownerFilter, viewArchived, sortBy, sortOrder]);
+
+  const totalPages = Math.ceil(filteredLeads.length / pageSize) || 1;
+  const clampedPage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (clampedPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, filteredLeads.length);
+  const paginatedLeads = filteredLeads.slice(startIndex, endIndex);
+
+  const isAllPageSelected =
+    paginatedLeads.length > 0 && paginatedLeads.every((l) => selectedIds.includes(l.id));
+
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
-      setSelectedIds(filteredLeads.map((l) => l.id));
+      const pageIds = paginatedLeads.map((l) => l.id);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
     } else {
-      setSelectedIds([]);
+      const pageIdSet = new Set(paginatedLeads.map((l) => l.id));
+      setSelectedIds((prev) => prev.filter((id) => !pageIdSet.has(id)));
     }
   };
 
@@ -731,7 +753,7 @@ export default function LeadsPage() {
                 <th className="w-8 px-3 py-3">
                   <input
                     type="checkbox"
-                    checked={filteredLeads.length > 0 && selectedIds.length === filteredLeads.length}
+                    checked={isAllPageSelected}
                     onChange={handleSelectAll}
                     className="h-3.5 w-3.5 rounded border-slate-300 text-[#ff7a59] focus:ring-[#ff7a59] cursor-pointer"
                   />
@@ -797,7 +819,7 @@ export default function LeadsPage() {
                   </td>
                 </tr>
               ) : (
-                filteredLeads.map((lead) => {
+                paginatedLeads.map((lead) => {
                   const isSelected = selectedIds.includes(lead.id);
 
                   return (
@@ -1104,6 +1126,89 @@ export default function LeadsPage() {
               )}
             </tbody>
           </table>
+
+          {/* Pagination Bar */}
+          {filteredLeads.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-[#dfe3eb] bg-[#f8fafc] text-xs text-[#516f90]">
+              <div className="flex items-center gap-3">
+                <span>
+                  Showing <strong className="text-[#2d3e50]">{startIndex + 1}</strong> to{' '}
+                  <strong className="text-[#2d3e50]">{endIndex}</strong> of{' '}
+                  <strong className="text-[#2d3e50]">{filteredLeads.length}</strong> leads
+                </span>
+
+                <div className="flex items-center gap-1.5 pl-3 border-l border-[#dfe3eb]">
+                  <span>Per page:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="rounded border border-[#cbd8eb] bg-white px-2 py-0.5 text-xs text-[#2d3e50] focus:border-[#ff7a59] focus:outline-none cursor-pointer"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Navigation Controls */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={clampedPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="h-7 px-2 text-xs border-[#cbd8eb] hover:bg-white disabled:opacity-40 cursor-pointer gap-0.5"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <span>Prev</span>
+                </Button>
+
+                {/* Page Number Pills */}
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => {
+                    if (totalPages <= 7) return true;
+                    if (p === 1 || p === totalPages) return true;
+                    return Math.abs(p - clampedPage) <= 1;
+                  })
+                  .map((p, idx, arr) => {
+                    const prevP = arr[idx - 1];
+                    const showEllipsis = prevP && p - prevP > 1;
+
+                    return (
+                      <React.Fragment key={p}>
+                        {showEllipsis && <span className="px-1 text-slate-400">…</span>}
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPage(p)}
+                          className={`h-7 w-7 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                            clampedPage === p
+                              ? 'bg-[#ff7a59] text-white shadow-xs'
+                              : 'text-[#33475b] hover:bg-[#dfe3eb]/50 border border-[#dfe3eb] bg-white'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={clampedPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="h-7 px-2 text-xs border-[#cbd8eb] hover:bg-white disabled:opacity-40 cursor-pointer gap-0.5"
+                >
+                  <span>Next</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
