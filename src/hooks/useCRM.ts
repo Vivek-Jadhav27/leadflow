@@ -256,20 +256,40 @@ export function useCRM() {
     }
   }, []);
 
+  const BULK_CHUNK = 100; // matches the server's per-request limit
   const bulkAction = useCallback(
-    async (body: Record<string, unknown>, success: (n: number) => string, failure: string) => {
-      const res = await run(
-        () => post<ActionResponse>('/api/leads/bulk-actions', body),
-        (r) => {
-          const done = r.leads?.length ?? 0;
-          if (done > 0) toast.success(success(done));
-          if (r.errors?.length) toast.error(`${r.errors.length} lead(s) failed: ${r.errors[0].message}`);
-        },
-        failure
-      );
-      return res;
+    async (body: Record<string, unknown> & { ids: string[] }, success: (n: number) => string, failure: string) => {
+      let done = 0;
+      const errors: { id: string; message: string }[] = [];
+      let lastOk: ActionResponse | undefined;
+      for (let i = 0; i < body.ids.length; i += BULK_CHUNK) {
+        const res = await run(
+          () => post<ActionResponse>('/api/leads/bulk-actions', { ...body, ids: body.ids.slice(i, i + BULK_CHUNK) }),
+          undefined,
+          failure
+        );
+        if (!res) break; // run() already showed the error and changed nothing for this chunk
+        lastOk = res;
+        done += res.leads?.length ?? 0;
+        errors.push(...(res.errors ?? []));
+      }
+      if (done > 0) toast.success(success(done));
+      if (errors.length) {
+        // Summarise distinct reasons ("Connection request was already sent." x 12) instead of one toast per lead.
+        const reasons = new Map<string, number>();
+        errors.forEach((e) => reasons.set(e.message, (reasons.get(e.message) ?? 0) + 1));
+        const summary = Array.from(reasons, ([m, n]) => (n > 1 ? `${m} (${n})` : m)).join(' · ');
+        toast.error(`${errors.length} lead(s) skipped: ${summary}`);
+      }
+      return lastOk;
     },
     []
+  );
+
+  const bulkMarkConnectionSent = useCallback(
+    (ids: string[]) =>
+      bulkAction({ action: 'connection_sent', ids }, (n) => `${n} lead(s) marked as connection request sent`, 'Failed to mark connection sent'),
+    [bulkAction]
   );
 
   const bulkAssignSequence = useCallback(
@@ -459,6 +479,7 @@ export function useCRM() {
     assignSequenceToLead,
     submitCustomSequence,
     bulkArchive,
+    bulkMarkConnectionSent,
     bulkDelete,
     // Sequences
     saveSequence,

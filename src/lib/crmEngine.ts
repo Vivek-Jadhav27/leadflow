@@ -22,6 +22,7 @@ import {
   planAdvance,
   planArchive,
   planAssign,
+  planConnectionSent,
   planEnroll,
   activeSteps,
   addDays,
@@ -145,6 +146,17 @@ export function enrollLead(actor: Actor, leadId: string, sequenceId: string | nu
     // Non-admins may only use approved sequences or ones they created that were approved.
     return planEnroll(lead, seq, pending, ctx);
   });
+}
+
+export function markConnectionSent(actor: Actor, leadId: string) {
+  return runLeadTransition(actor, leadId, async ({ tx, lead, pending, ctx }) => {
+    const seq = lead.sequenceId ? await readSequence(tx, actor, lead.sequenceId) : null;
+    return planConnectionSent(lead, seq, pending, ctx);
+  });
+}
+
+export function markConnectionSentBulk(actor: Actor, leadIds: string[]) {
+  return runMany(actor, leadIds, (id) => markConnectionSent(actor, id));
 }
 
 export function recordReply(actor: Actor, leadId: string, input: { message?: string; outcome?: string }) {

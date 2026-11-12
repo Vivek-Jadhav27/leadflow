@@ -8,6 +8,7 @@ import {
   archiveLead,
   enrichLead,
   enrollLead,
+  markConnectionSent,
   recordActivity,
   recordReply,
   submitCustomSequence,
@@ -22,6 +23,7 @@ import { str } from '@/lib/leadValidation';
  *
  *   advance   { expectedStep? }          move to the next sequence step
  *   enroll    { sequenceId | null }      enrol in (or remove from) a sequence
+ *   connection_sent                      record that the connection request was sent
  *   reply     { message?, outcome? }     prospect replied / meeting booked
  *   archive   { archived: boolean }      archive or restore
  *   enrich    { data }                   attach enrichment data
@@ -48,6 +50,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         const sequenceId = body.sequenceId === null || body.sequenceId === undefined ? null : requireString(body.sequenceId, 'sequenceId');
         return enrollLead(actor, id, sequenceId);
       }
+      case 'connection_sent':
+        return markConnectionSent(actor, id);
       case 'reply':
         return recordReply(actor, id, { message: str(body.message, 2000), outcome: str(body.outcome, 100) || undefined });
       case 'archive':

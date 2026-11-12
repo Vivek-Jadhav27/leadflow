@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Sparkles,
   GitBranch,
+  Send,
 } from 'lucide-react';
 import { LinkedinIcon as Linkedin } from '@/components/common/LinkedinIcon';
 
@@ -52,6 +53,7 @@ export default function LeadsPage() {
     archiveLead,
     bulkAssign,
     bulkArchive,
+    bulkMarkConnectionSent,
     bulkDelete,
     assignSequenceToLead,
     bulkAssignSequence,
@@ -654,6 +656,23 @@ export default function LeadsPage() {
                 )}
               </div>
             )}
+
+            {/* Bulk: record that the LinkedIn connection request was sent */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                const n = selectedIds.length;
+                if (!confirm(`Mark ${n} lead${n > 1 ? 's' : ''} as connection request sent on LinkedIn?`)) return;
+                const res = await bulkMarkConnectionSent(selectedIds);
+                if (res) setSelectedIds([]);
+              }}
+              className="h-7 text-xs bg-white text-[#33475b] gap-1 cursor-pointer"
+              title="Record that you sent the LinkedIn connection request to these leads"
+            >
+              <Send className="h-3 w-3 text-[#0091ae]" />
+              <span>Mark Connection Sent</span>
+            </Button>
 
             {/* Bulk Enroll in Sequence */}
             <div className="relative">

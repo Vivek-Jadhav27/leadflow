@@ -360,6 +360,42 @@ export function planActivateAfterApproval(lead: Doc, seq: Doc, pendingTasks: Doc
   };
 }
 
+const SENT_OR_BEYOND = ['request_sent', 'pending', 'request_pending', 'connected', 'verified'];
+
+/**
+ * The rep sent a LinkedIn connection request outside the app and is recording it.
+ * - If the lead is on the connection-request step of its sequence, this completes that step (the same
+ *   transition as marking the step task done): the cadence moves on and the next task is scheduled.
+ * - Otherwise it just records the status and a log entry.
+ * Safe to repeat: a lead that is already past this point is rejected, not changed twice.
+ */
+export function planConnectionSent(lead: Doc, seq: Doc | null, pendingTasks: Doc[], ctx: PlanContext): Plan {
+  if (lead.disposition === 'archived') throw new PlanError(409, 'LEAD_ARCHIVED', 'Archived leads cannot be updated.');
+  const status = lead.connectionStatus || 'not_started';
+  if (SENT_OR_BEYOND.includes(status)) throw new PlanError(409, 'ALREADY_SENT', 'Connection request was already sent.');
+  if (status === 'declined') throw new PlanError(409, 'DECLINED', 'The prospect declined the connection request.');
+
+  if (seq && lead.sequenceId === seq.id && !INACTIVE_OUTREACH.includes(lead.outreachStatus)) {
+    const current = activeSteps(seq).find((st) => st.stepNumber === lead.currentStepNumber);
+    if (current?.actionType === 'connection_request') {
+      return planAdvance(lead, seq, pendingTasks, ctx, { expectedStep: lead.currentStepNumber });
+    }
+  }
+
+  return {
+    leadUpdate: { connectionStatus: 'request_sent', updatedAt: ctx.now },
+    taskUpdates: [],
+    newTasks: [],
+    newActivities: [
+      buildActivity(lead, {
+        type: 'connection_request_sent',
+        title: 'LinkedIn Connection Request Sent',
+        description: `Connection request to ${leadName(lead)} marked as sent. Awaiting acceptance.`,
+      }, ctx),
+    ],
+  };
+}
+
 export function planArchive(lead: Doc, archived: boolean, ctx: PlanContext): Plan {
   return {
     leadUpdate: {
