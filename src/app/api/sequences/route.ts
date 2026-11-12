@@ -1,77 +1,38 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
-import fs from 'fs';
-import path from 'path';
+import { adminDb } from '@/lib/firebaseAdmin';
+import { requireWorkspaceAdmin, requireWorkspaceMember } from '@/lib/serverAuth';
+import { MAX_BATCH, str } from '@/lib/leadValidation';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-workspace-id',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const DATA_DIR = path.join(process.cwd(), '.data');
-const DATA_FILE = path.join(DATA_DIR, 'extension-sequences.json');
+const MAX_STEPS = 50;
+const STEP_ACTIONS = ['connection_request', 'wait_for_acceptance', 'send_message', 'wait_delay', 'followup', 'complete_details'];
+const SEQUENCE_STATUSES = ['active', 'paused', 'draft', 'archived', 'pending_approval'];
 
-const DEFAULT_SEQUENCES = [
-  {
-    id: 'seq_default_outbound',
-    name: 'LinkedIn 4-Step Outbound Cadence',
-    channel: 'linkedin',
-    description: 'Standard multi-touch LinkedIn outbound sequence for decision makers.',
-    steps: [
-      { id: 'step_def_1', stepNumber: 1, actionType: 'connection_request', title: 'Connection Request', delayDays: 0, messageTemplate: 'Hi {{firstName}}, noticing your work at {{company}}. Would love to connect and share insights.', enabled: true },
-      { id: 'step_def_2', stepNumber: 2, actionType: 'send_message', title: 'First Follow-up', delayDays: 3, messageTemplate: 'Hi {{firstName}}, thanks for connecting! Following up to see if you had a moment to review how we help teams at {{company}} optimize outbound sales outreach.', enabled: true },
-      { id: 'step_def_3', stepNumber: 3, actionType: 'send_message', title: 'Second Follow-up', delayDays: 7, messageTemplate: 'Hi {{firstName}}, following up on my previous message. Wanted to see if you had 5 minutes this week for a brief conversation?', enabled: true },
-    ],
-    status: 'active',
-    approvalStatus: 'approved',
-    workspaceId: 'default_workspace',
-    targetRole: 'all',
-    createdBy: 'Workspace Admin',
-    createdByRole: 'admin',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
-];
-
-function getStoredSequences(): any[] {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(DEFAULT_SEQUENCES, null, 2), 'utf-8');
-      return DEFAULT_SEQUENCES;
-    }
-    const content = fs.readFileSync(DATA_FILE, 'utf-8');
-    const parsed = JSON.parse(content);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_SEQUENCES;
-  } catch {
-    return DEFAULT_SEQUENCES;
-  }
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: corsHeaders });
 }
 
-function saveStoredSequences(sequences: any[]): void {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(sequences, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving sequences file:', err);
-  }
+function sanitizeSteps(input: unknown): any[] | null {
+  if (!Array.isArray(input)) return null;
+  return input.slice(0, MAX_STEPS).map((s: any, idx: number) => ({
+    ...(typeof s?.id === 'string' ? { id: str(s.id, 100) } : {}),
+    stepNumber: idx + 1,
+    actionType: STEP_ACTIONS.includes(s?.actionType) ? s.actionType : 'send_message',
+    title: str(s?.title, 200) || `Step ${idx + 1}`,
+    delayDays: Number.isFinite(s?.delayDays) && s.delayDays >= 0 ? Math.min(s.delayDays, 365) : 0,
+    messageTemplate: str(s?.messageTemplate, 3000),
+    enabled: s?.enabled !== false,
+  }));
 }
-
-interface CachedSequencesResult {
-  sequences: any[];
-  count: number;
-  cachedAt: number;
-}
-const sequencesServerCache = new Map<string, CachedSequencesResult>();
-const SEQUENCES_CACHE_TTL_MS = 60 * 1000;
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
@@ -79,316 +40,171 @@ export async function OPTIONS() {
 
 export async function GET(req: NextRequest) {
   try {
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, role, workspaceId } = auth.context;
 
-    let token = '';
-    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      const tokenCookie = req.cookies.get('leadflow_auth_token');
-      if (tokenCookie) {
-        token = tokenCookie.value;
-      }
-    }
+    const snap = await adminDb.collection('sequences').where('workspaceId', '==', workspaceId).limit(500).get();
+    let sequences = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Record<string, any>[];
 
-    let resolvedWorkspaceId =
-      req.headers.get('x-workspace-id') ||
-      req.nextUrl.searchParams.get('workspaceId') ||
-      null;
-
-    let callerUid: string | null = null;
-    let callerEmail: string | null = null;
-    let callerRole: string = 'admin';
-
-    if (isAdminReady && token) {
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        if (decoded?.uid) {
-          callerUid = decoded.uid;
-          callerEmail = decoded.email || null;
-          if (adminDb) {
-            try {
-              const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-              if (userDoc.exists) {
-                const uData = userDoc.data();
-                callerRole = uData?.role || 'sdr';
-                if (!resolvedWorkspaceId && uData?.currentWorkspaceId) {
-                  resolvedWorkspaceId = uData.currentWorkspaceId;
-                }
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-    }
-
-    // Role-isolated cache key so Admin views are never poisoned by SDR-filtered caches
-    const cacheKey = `${resolvedWorkspaceId || 'all'}_${callerRole}_${callerUid || 'anon'}`;
-    const cached = sequencesServerCache.get(cacheKey);
-    const nowTs = Date.now();
-
-    if (cached && nowTs - cached.cachedAt < SEQUENCES_CACHE_TTL_MS) {
-      return NextResponse.json(
-        {
-          success: true,
-          count: cached.count,
-          sequences: cached.sequences,
-          fromCache: true,
-        },
-        { status: 200, headers: corsHeaders }
-      );
-    }
-
-    let firestoreSequences: any[] = [];
-    if (isAdminReady && adminDb) {
-      try {
-        let q: any = adminDb.collection('sequences');
-        const snapshot = await q.get();
-        firestoreSequences = snapshot.docs.map((doc: any) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-      } catch (fsErr) {
-        console.warn('[API /sequences GET] Firestore read fallback (quota/network):', (fsErr as any)?.message || fsErr);
-      }
-    }
-
-    const stored = getStoredSequences();
-    const seqMap = new Map<string, any>();
-    stored.forEach((s) => seqMap.set(s.id, s));
-    firestoreSequences.forEach((s) => seqMap.set(s.id, { ...seqMap.get(s.id), ...s }));
-    let sequences = Array.from(seqMap.values());
-
-    // Scope to current workspace while including default_workspace fallbacks and bespoke custom cadences
-    if (resolvedWorkspaceId) {
-      sequences = sequences.filter((s: any) =>
-        !s.workspaceId ||
-        s.workspaceId === resolvedWorkspaceId ||
-        s.workspaceId === 'default_workspace' ||
-        s.id?.startsWith('seq_custom_')
-      );
-    }
-
-    // If caller is not admin (SDR or AE), enforce access rules:
-    // Individual can see sequences created by them, custom sequences for their leads, or admin templates targeting their role
-    if (callerRole && callerRole !== 'admin') {
-      sequences = sequences.filter((s: any) => {
-        const isCreator =
-          (callerUid && s.createdByUid === callerUid) ||
-          (callerEmail && s.createdBy?.toLowerCase().trim() === callerEmail.toLowerCase().trim());
-        const isCustomCadence = s.id?.startsWith('seq_custom_');
-        const isAdminCreated =
-          s.createdByRole === 'admin' ||
-          !s.createdByUid ||
-          s.createdBy === 'Workspace Admin' ||
-          (s.createdBy && s.createdBy.toLowerCase().includes('admin'));
-        const matchesTargetRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === callerRole;
-        return isCreator || isCustomCadence || (isAdminCreated && matchesTargetRole);
+    // Non-admins see sequences they created, plus approved shared (non-custom) templates for their role.
+    if (role !== 'admin') {
+      sequences = sequences.filter((s) => {
+        if (s.createdByUid === uid) return true;
+        const sharedTemplate = s.approvalStatus === 'approved' && !s.isCustom;
+        const matchesRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === role;
+        return sharedTemplate && matchesRole;
       });
     }
 
-    sequencesServerCache.set(cacheKey, {
-      sequences,
-      count: sequences.length,
-      cachedAt: Date.now(),
-    });
-
-    return NextResponse.json(
-      {
-        success: true,
-        count: sequences.length,
-        sequences,
-      },
-      { status: 200, headers: corsHeaders }
-    );
-  } catch (error: any) {
+    return json({ success: true, count: sequences.length, sequences });
+  } catch (error) {
     console.error('[API /sequences GET] Error:', error);
-    return NextResponse.json({ error: error?.message || 'Failed to fetch sequences' }, { status: 500, headers: corsHeaders });
+    return json({ error: 'Failed to fetch sequences' }, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    sequencesServerCache.clear(); // Invalidate cache on sequence creation/update
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, email, role, workspaceId } = auth.context;
+    const isAdmin = role === 'admin';
+
     const body = await req.json();
-
-    if (!body.name) {
-      return NextResponse.json({ error: 'Sequence name is required' }, { status: 400, headers: corsHeaders });
-    }
-
-    let token = '';
-    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      const tokenCookie = req.cookies.get('leadflow_auth_token');
-      if (tokenCookie) {
-        token = tokenCookie.value;
-      }
-    }
-
-    let resolvedWorkspaceId = req.headers.get('x-workspace-id') || body.workspaceId || null;
-    let author = body.createdBy || 'Workspace Admin';
-    let authorUid: string | null = body.createdByUid || null;
-
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    if (isAdminReady && token) {
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        if (decoded?.email) author = decoded.email;
-        if (decoded?.uid) {
-          authorUid = decoded.uid;
-          if (!resolvedWorkspaceId) {
-            const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-            if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
-              resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
-            } else {
-              const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
-              if (!ownedWsSnap.empty) {
-                resolvedWorkspaceId = ownedWsSnap.docs[0].id;
-              }
-            }
-          }
-        }
-      } catch {}
-    }
+    const name = str(body?.name, 200);
+    if (!name) return json({ error: 'Sequence name is required' }, 400);
 
     const now = new Date().toISOString();
-    const seqId = body.id || `seq_${Date.now()}`;
 
-    // Preserve original creator metadata if already set or existing
-    const currentSequences = getStoredSequences();
-    const existingIndex = currentSequences.findIndex((s) => s.id === seqId);
-    const existingSeq = existingIndex >= 0 ? currentSequences[existingIndex] : null;
-
-    const originalCreatedBy = body.createdBy || existingSeq?.createdBy || author;
-    const originalCreatedByUid = body.createdByUid || existingSeq?.createdByUid || authorUid;
-    const originalCreatedByRole = body.createdByRole || existingSeq?.createdByRole || 'sdr';
-
-    const isApproved = body.approvalStatus === 'approved' || body.status === 'active';
-    const approvedBy = body.approvedBy || (isApproved ? (existingSeq?.approvedBy || author) : null);
-    const approvedAt = body.approvedAt || (isApproved ? (existingSeq?.approvedAt || now) : null);
-
-    const sequenceData = {
-      id: seqId,
-      name: body.name.trim(),
-      channel: 'linkedin',
-      description: body.description || 'LinkedIn multi-step outbound cadence',
-      steps: body.steps || [],
-      status: body.status || 'active',
-      approvalStatus: body.approvalStatus || (isApproved ? 'approved' : 'pending'),
-      approvedBy,
-      approvedAt,
-      workspaceId: resolvedWorkspaceId || existingSeq?.workspaceId || 'default_workspace',
-      createdBy: originalCreatedBy,
-      createdByUid: originalCreatedByUid,
-      createdByRole: originalCreatedByRole,
-      targetRole: body.targetRole || existingSeq?.targetRole || 'all',
-      isCustom: Boolean(body.isCustom || existingSeq?.isCustom || seqId.startsWith('seq_custom_')),
-      targetLeadId: body.targetLeadId || existingSeq?.targetLeadId || null,
-      targetLeadName: body.targetLeadName || existingSeq?.targetLeadName || null,
-      targetLeadCompany: body.targetLeadCompany || existingSeq?.targetLeadCompany || null,
-      targetLeadLinkedin: body.targetLeadLinkedin || existingSeq?.targetLeadLinkedin || null,
-      enrolledLeadsCount: body.enrolledLeadsCount || existingSeq?.enrolledLeadsCount || 0,
-      createdAt: body.createdAt || existingSeq?.createdAt || now,
-      updatedAt: now,
-      updatedBy: author,
-    };
-
-    // 1. Save to local fallback storage
-    if (existingIndex >= 0) {
-      currentSequences[existingIndex] = { ...currentSequences[existingIndex], ...sequenceData };
-    } else {
-      currentSequences.unshift(sequenceData);
-    }
-    saveStoredSequences(currentSequences);
-
-    // 2. Also save to Firestore if available
-    if (isAdminReady && adminDb) {
-      try {
-        await adminDb.collection('sequences').doc(seqId).set(sequenceData, { merge: true });
-
-        // If sequence was approved, activate matching leads in Firestore
-        if (isApproved) {
-          try {
-            let leadsToActivate: any[] = [];
-            if (sequenceData.targetLeadId) {
-              const leadDoc = await adminDb.collection('leads').doc(sequenceData.targetLeadId).get();
-              if (leadDoc.exists) {
-                leadsToActivate.push({ id: leadDoc.id, ...leadDoc.data() });
-              }
-            } else {
-              const qSnap = await adminDb.collection('leads').where('sequenceId', '==', seqId).limit(10).get();
-              qSnap.forEach((d: any) => leadsToActivate.push({ id: d.id, ...d.data() }));
-            }
-
-            for (const l of leadsToActivate) {
-              if (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence') {
-                const step2Title = sequenceData.steps?.[1]?.title || 'Step 2: Follow-up 1';
-                const delay = sequenceData.steps?.[1]?.delayDays || 3;
-                const nextFollowUp = new Date(Date.now() + delay * 86400000).toISOString().split('T')[0];
-                await adminDb.collection('leads').doc(l.id).set({
-                  outreachStatus: 'in_sequence',
-                  currentStepNumber: 2,
-                  nextActionTitle: step2Title,
-                  nextFollowUpDate: l.nextFollowUpDate || nextFollowUp,
-                  updatedAt: now,
-                }, { merge: true });
-              }
-            }
-          } catch (leadActErr) {
-            console.warn('[API /sequences POST] Lead activation warning:', leadActErr);
-          }
+    // Updating an existing sequence requires it to be in this workspace.
+    let existing: Record<string, any> | null = null;
+    let seqId = '';
+    if (typeof body.id === 'string' && body.id) {
+      const snap = await adminDb.collection('sequences').doc(body.id).get();
+      if (snap.exists) {
+        if (snap.data()?.workspaceId !== workspaceId) {
+          return json({ error: 'Sequence not found' }, 404);
         }
-      } catch (fsErr) {
-        console.warn('[API /sequences POST] Firestore sequence write warning (quota/network):', (fsErr as any)?.message || fsErr);
+        existing = snap.data() as Record<string, any>;
+        seqId = snap.id;
       }
     }
+    if (existing && !isAdmin) {
+      // Members may only edit their own, not-yet-approved sequences.
+      if (existing.createdByUid !== uid || existing.approvalStatus === 'approved') {
+        return json({ error: 'Forbidden: only admins can modify approved or shared sequences.' }, 403);
+      }
+    }
+    if (!existing) seqId = `seq_${randomUUID()}`;
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Sequence saved successfully',
-        sequence: sequenceData,
-      },
-      { status: 200, headers: corsHeaders }
-    );
-  } catch (error: any) {
+    const steps = sanitizeSteps(body.steps);
+    const requestedStatus = SEQUENCE_STATUSES.includes(body.status) ? body.status : null;
+
+    // Only admins can approve/activate. Everything created by a member starts pending.
+    const wantsApproval = body.approvalStatus === 'approved' || body.status === 'active';
+    const isApproved = isAdmin
+      ? wantsApproval || (existing?.approvalStatus === 'approved' && body.approvalStatus !== 'pending')
+      : false;
+    const wasApproved = existing?.approvalStatus === 'approved';
+
+    const status = isAdmin ? requestedStatus || existing?.status || 'active' : 'pending_approval';
+    const approvalStatus = isApproved ? 'approved' : 'pending';
+
+    const sequenceData: Record<string, any> = {
+      id: seqId,
+      name,
+      channel: 'linkedin',
+      description: str(body.description, 1000) || existing?.description || 'LinkedIn multi-step outbound cadence',
+      steps: steps ?? existing?.steps ?? [],
+      status,
+      approvalStatus,
+      approvedBy: isApproved ? (wasApproved ? existing?.approvedBy || email : email) : null,
+      approvedAt: isApproved ? (wasApproved ? existing?.approvedAt || now : now) : null,
+      workspaceId,
+      createdBy: existing?.createdBy || email,
+      createdByUid: existing?.createdByUid || uid,
+      createdByRole: existing?.createdByRole || role,
+      targetRole: ['all', 'sdr', 'ae'].includes(body.targetRole) ? body.targetRole : existing?.targetRole || 'all',
+      isCustom: Boolean(existing?.isCustom),
+      targetLeadId: existing?.targetLeadId || null,
+      targetLeadName: existing?.targetLeadName || null,
+      targetLeadCompany: existing?.targetLeadCompany || null,
+      targetLeadLinkedin: existing?.targetLeadLinkedin || null,
+      enrolledLeadsCount: existing?.enrolledLeadsCount || 0,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      updatedBy: email,
+    };
+
+    await adminDb.collection('sequences').doc(seqId).set(sequenceData, { merge: true });
+
+    // Newly approved: activate leads that were waiting on this sequence (same workspace only).
+    if (isApproved && !wasApproved) {
+      const leadsToActivate = sequenceData.targetLeadId
+        ? [await adminDb.collection('leads').doc(sequenceData.targetLeadId).get()]
+        : (await adminDb.collection('leads').where('workspaceId', '==', workspaceId).where('sequenceId', '==', seqId).limit(MAX_BATCH).get()).docs;
+
+      const batch = adminDb.batch();
+      let writes = 0;
+      for (const leadDoc of leadsToActivate) {
+        const l = leadDoc.data();
+        if (!leadDoc.exists || !l || l.workspaceId !== workspaceId) continue;
+        if (l.outreachStatus === 'pending_sequence_approval' || l.outreachStatus === 'needs_sequence') {
+          const step2 = sequenceData.steps?.[1];
+          const delay = step2?.delayDays || 3;
+          batch.update(leadDoc.ref, {
+            outreachStatus: 'in_sequence',
+            currentStepNumber: 2,
+            nextActionTitle: step2?.title || 'Step 2: Follow-up 1',
+            nextFollowUpDate: l.nextFollowUpDate || new Date(Date.now() + delay * 86400000).toISOString().split('T')[0],
+            updatedAt: now,
+          });
+          writes++;
+        }
+      }
+      if (writes > 0) await batch.commit();
+    }
+
+    return json({ success: true, message: 'Sequence saved successfully', sequence: sequenceData });
+  } catch (error) {
     console.error('[API /sequences POST] Error:', error);
-    return NextResponse.json({ error: error?.message || 'Failed to save sequence' }, { status: 500, headers: corsHeaders });
+    return json({ error: 'Failed to save sequence' }, 500);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    sequencesServerCache.clear();
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
+    const auth = await requireWorkspaceAdmin(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { workspaceId } = auth.context;
 
-    if (!id) {
-      return NextResponse.json({ error: 'Sequence id required' }, { status: 400, headers: corsHeaders });
+    const id = new URL(req.url).searchParams.get('id');
+    if (!id) return json({ error: 'Sequence id required' }, 400);
+
+    const ref = adminDb.collection('sequences').doc(id);
+    const snap = await ref.get();
+    if (!snap.exists || snap.data()?.workspaceId !== workspaceId) {
+      return json({ error: 'Sequence not found' }, 404);
     }
 
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    if (isAdminReady && adminDb) {
-      await adminDb.collection('sequences').doc(id).delete();
+    const enrolled = await adminDb
+      .collection('leads')
+      .where('workspaceId', '==', workspaceId)
+      .where('sequenceId', '==', id)
+      .count()
+      .get();
+    if (enrolled.data().count > 0) {
+      return json(
+        { error: `Cannot delete: ${enrolled.data().count} lead(s) are enrolled in this sequence. Unenrol them first.` },
+        409
+      );
     }
 
-    return NextResponse.json({ success: true, message: 'Sequence deleted from Firestore' }, { status: 200, headers: corsHeaders });
-  } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to delete sequence' }, { status: 500, headers: corsHeaders });
+    await ref.delete();
+    return json({ success: true, message: 'Sequence deleted' });
+  } catch (error) {
+    console.error('[API /sequences DELETE] Error:', error);
+    return json({ error: 'Failed to delete sequence' }, 500);
   }
 }
-

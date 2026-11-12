@@ -1,182 +1,166 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import * as fs from 'fs';
-import * as path from 'path';
-import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
+import { adminDb } from '@/lib/firebaseAdmin';
+import { requireWorkspaceMember } from '@/lib/serverAuth';
+import { MAX_BATCH, cleanObject, normalizeLinkedinUrl, resolveAssignee, str } from '@/lib/leadValidation';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-workspace-id',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const DATA_DIR = isServerless ? path.join('/tmp', '.data') : path.join(process.cwd(), '.data');
-const DATA_FILE = path.join(DATA_DIR, 'extension-leads.json');
+const MAX_ROWS = 2000;
 
-function saveStoredLeads(leads: any[]): void {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    let existing: any[] = [];
-    if (fs.existsSync(DATA_FILE)) {
-      try {
-        existing = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')) || [];
-      } catch {}
-    }
-    const map = new Map<string, any>();
-    existing.forEach((l) => map.set(l.id, l));
-    leads.forEach((l) => map.set(l.id, l));
-    fs.writeFileSync(DATA_FILE, JSON.stringify(Array.from(map.values()), null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving local extension leads backup:', err);
-  }
+function json(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: corsHeaders });
 }
 
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
+  return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
 export async function POST(req: NextRequest) {
   try {
-    let token = '';
-    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      const tokenCookie = req.cookies.get('leadflow_auth_token');
-      if (tokenCookie) {
-        token = tokenCookie.value;
-      }
-    }
+    const auth = await requireWorkspaceMember(req, corsHeaders);
+    if (auth.response) return auth.response;
+    const { uid, email, role, workspaceId } = auth.context;
+    const isAdmin = role === 'admin';
 
     const body = await req.json();
-    const rawLeads = body.leads;
-
+    const rawLeads = body?.leads;
     if (!Array.isArray(rawLeads) || rawLeads.length === 0) {
-      return NextResponse.json(
-        { error: 'No leads provided. An array of leads is required.' },
-        { status: 400, headers: corsHeaders }
-      );
+      return json({ error: 'No leads provided. An array of leads is required.' }, 400);
+    }
+    if (rawLeads.length > MAX_ROWS) {
+      return json({ error: `At most ${MAX_ROWS} leads can be imported at once.` }, 400);
     }
 
-    let capturedBy = body.capturedBy || 'csv_bulk_import';
-    let capturedByUid = body.capturedByUid || null;
-    let resolvedWorkspaceId =
-      req.headers.get('x-workspace-id') ||
-      body.workspaceId ||
-      null;
-
-    const isAdminReady =
-      typeof isFirebaseAdminConfigured === 'function'
-        ? isFirebaseAdminConfigured()
-        : isFirebaseAdminConfigured;
-
-    if (isAdminReady && token) {
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        if (decoded?.email) {
-          capturedBy = decoded.email;
-          capturedByUid = decoded.uid;
-        }
-        if (!resolvedWorkspaceId && decoded?.uid) {
-          const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
-          if (userDoc.exists && userDoc.data()?.currentWorkspaceId) {
-            resolvedWorkspaceId = userDoc.data()?.currentWorkspaceId;
-          } else {
-            const ownedWsSnap = await adminDb.collection('workspaces').where('ownerId', '==', decoded.uid).limit(1).get();
-            if (!ownedWsSnap.empty) {
-              resolvedWorkspaceId = ownedWsSnap.docs[0].id;
-            }
-          }
-        }
-      } catch {}
+    // Assignee: admins may pick an active member; everyone else imports into their own list.
+    let assignee = { uid, name: str(auth.context.profile?.name, 200) || email.split('@')[0], email };
+    if (isAdmin && body.defaultAssignedToId && body.defaultAssignedToId !== uid) {
+      const resolved = await resolveAssignee(workspaceId, String(body.defaultAssignedToId));
+      if (!resolved) return json({ error: 'defaultAssignedToId is not an active member of this workspace.' }, 400);
+      assignee = resolved;
     }
 
-    const workspaceId = resolvedWorkspaceId || 'default_workspace';
+    let sequenceId: string | null = null;
+    let sequenceName: string | null = null;
+    if (body.defaultSequenceId) {
+      const seqSnap = await adminDb.collection('sequences').doc(String(body.defaultSequenceId)).get();
+      const seq = seqSnap.data();
+      if (!seqSnap.exists || !seq || seq.workspaceId !== workspaceId) {
+        return json({ error: 'Unknown sequence.' }, 400);
+      }
+      if (!isAdmin && seq.approvalStatus !== 'approved') {
+        return json({ error: 'Sequence is not approved.' }, 403);
+      }
+      sequenceId = seqSnap.id;
+      sequenceName = seq.name || null;
+    }
+
     const now = new Date().toISOString();
+    const rejected: { row: number; reason: string }[] = [];
+    const seenUrls = new Set<string>();
+    const accepted: Record<string, any>[] = [];
 
-    const formattedLeads = rawLeads.map((item: any, idx: number) => {
-      const id = item.id || `lead_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
-      const seqId = item.sequenceId || body.defaultSequenceId || null;
-      const seqName = item.sequenceName || (seqId ? 'LinkedIn 4-Step Outbound' : null);
-
-      return {
-        id,
-        firstName: (item.firstName || '').trim(),
-        lastName: (item.lastName || '').trim(),
-        company: (item.company || '').trim(),
-        jobTitle: (item.jobTitle || 'Prospect').trim(),
+    rawLeads.forEach((item: any, idx: number) => {
+      const firstName = str(item?.firstName, 200);
+      const company = str(item?.company, 200);
+      if (!firstName || !company) {
+        rejected.push({ row: idx + 1, reason: 'First name and company are required.' });
+        return;
+      }
+      let linkedinUrl = '';
+      if (item.linkedinUrl) {
+        const normalized = normalizeLinkedinUrl(item.linkedinUrl);
+        if (!normalized) {
+          rejected.push({ row: idx + 1, reason: 'Invalid LinkedIn URL.' });
+          return;
+        }
+        if (seenUrls.has(normalized)) {
+          rejected.push({ row: idx + 1, reason: 'Duplicate LinkedIn URL in file.' });
+          return;
+        }
+        seenUrls.add(normalized);
+        linkedinUrl = normalized;
+      }
+      accepted.push({
+        id: `lead_${randomUUID()}`,
+        firstName,
+        lastName: str(item.lastName, 200),
+        company,
+        jobTitle: str(item.jobTitle, 200) || 'Prospect',
         email: null,
         phone: null,
-        linkedinUrl: (item.linkedinUrl || '').trim(),
+        linkedinUrl,
         channel: 'linkedin' as const,
-        sequenceId: seqId,
-        sequenceName: seqName,
-        currentStepNumber: seqId ? (item.currentStepNumber || 1) : 0,
-        totalSteps: item.totalSteps || 4,
-        connectionStatus: item.connectionStatus || 'not_started',
-        outreachStatus: item.outreachStatus || (seqId ? 'in_sequence' : 'unassigned'),
-        disposition: item.disposition || 'active',
-        notes: item.notes || 'Imported via CSV bulk upload',
-        capturedBy,
-        capturedByUid,
-        assignedToId: item.assignedToId || body.defaultAssignedToId || (capturedByUid ? capturedByUid : null),
-        assignedToName: item.assignedToName || body.defaultAssignedToName || (capturedBy ? capturedBy.split('@')[0] : null),
-        assignedToEmail: item.assignedToEmail || (capturedBy ? capturedBy : null),
-        workspaceId: item.workspaceId || workspaceId,
-        nextFollowUpDate: item.nextFollowUpDate || null,
-        nextActionTitle: item.nextActionTitle || null,
-        createdAt: item.createdAt || now,
+        sequenceId,
+        sequenceName,
+        currentStepNumber: sequenceId ? 1 : 0,
+        totalSteps: 4,
+        connectionStatus: 'not_started',
+        outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
+        disposition: 'active',
+        notes: str(item.notes, 5000) || 'Imported via CSV bulk upload',
+        capturedBy: email,
+        capturedByUid: uid,
+        assignedToId: assignee.uid,
+        assignedToName: assignee.name,
+        assignedToEmail: assignee.email,
+        workspaceId,
+        nextFollowUpDate: null,
+        nextActionTitle: null,
+        createdAt: now,
         updatedAt: now,
-      };
+      });
     });
 
-    // Write to Firestore in chunks of up to 400 documents per batch
-    if (isAdminReady && adminDb) {
-      try {
-        const chunkSize = 400;
-        for (let i = 0; i < formattedLeads.length; i += chunkSize) {
-          const chunk = formattedLeads.slice(i, i + chunkSize);
-          const batch = adminDb.batch();
-          for (const lead of chunk) {
-            const docRef = adminDb.collection('leads').doc(lead.id);
-            batch.set(docRef, lead, { merge: true });
-          }
-          await batch.commit();
-        }
-      } catch (fsErr) {
-        console.error('[API /leads/bulk POST] Firestore batch error:', fsErr);
+    // Skip leads whose LinkedIn URL already exists in this workspace.
+    const urls = accepted.map((l) => l.linkedinUrl).filter(Boolean);
+    const existingUrls = new Set<string>();
+    for (let i = 0; i < urls.length; i += 30) {
+      const chunk = urls.slice(i, i + 30);
+      const snap = await adminDb
+        .collection('leads')
+        .where('workspaceId', '==', workspaceId)
+        .where('linkedinUrl', 'in', chunk)
+        .select('linkedinUrl')
+        .get();
+      snap.docs.forEach((d) => existingUrls.add(d.data().linkedinUrl));
+    }
+    const toWrite = accepted.filter((l) => {
+      if (l.linkedinUrl && existingUrls.has(l.linkedinUrl)) {
+        rejected.push({ row: rawLeads.findIndex((r: any) => normalizeLinkedinUrl(r?.linkedinUrl) === l.linkedinUrl) + 1, reason: 'Lead already exists in workspace.' });
+        return false;
       }
+      return true;
+    });
+
+    for (let i = 0; i < toWrite.length; i += MAX_BATCH) {
+      const batch = adminDb.batch();
+      for (const lead of toWrite.slice(i, i + MAX_BATCH)) {
+        batch.set(adminDb.collection('leads').doc(lead.id), cleanObject(lead));
+      }
+      await batch.commit();
     }
 
-    // Server-side backup save
-    saveStoredLeads(formattedLeads);
-
-    return NextResponse.json(
+    return json(
       {
         success: true,
-        count: formattedLeads.length,
-        leads: formattedLeads,
-        message: `Successfully imported ${formattedLeads.length} lead(s) to Firestore!`,
+        count: toWrite.length,
+        skipped: rejected.length,
+        rejected: rejected.slice(0, 100),
+        leads: toWrite,
+        message: `Imported ${toWrite.length} lead(s); skipped ${rejected.length}.`,
       },
-      {
-        status: 201,
-        headers: corsHeaders,
-      }
+      201
     );
-  } catch (err: any) {
+  } catch (err) {
     console.error('[API /leads/bulk POST] Error:', err);
-    return NextResponse.json(
-      { error: err?.message || 'Failed to bulk import leads' },
-      { status: 500, headers: corsHeaders }
-    );
+    return json({ error: 'Failed to bulk import leads' }, 500);
   }
 }
-

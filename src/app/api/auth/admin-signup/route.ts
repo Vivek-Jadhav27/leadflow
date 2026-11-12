@@ -5,6 +5,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth, adminDb, isFirebaseAdminConfigured } from '@/lib/firebaseAdmin';
 import { adminSignupSchema } from '@/schemas/auth.schema';
 import { normalizeEmail } from '@/utils/validation';
+import { randomUUID } from 'crypto';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,92 +30,64 @@ export async function POST(req: NextRequest) {
       ? fullName.trim()
       : emailNorm.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-    // If server does not have service account key, notify caller to use client SDK
-    if (!isFirebaseAdminConfigured) {
+    if (!isFirebaseAdminConfigured()) {
       return NextResponse.json(
         {
-          error: 'Firebase Admin service account key is not configured in .env.local.',
+          error: 'Workspace provisioning is not available: server credentials are not configured.',
           code: 'MISSING_ADMIN_CREDENTIALS',
         },
         { status: 503 }
       );
     }
 
-    let uid = '';
-    let isExistingAuthUser = false;
+    // Public endpoint: bound abuse per client address and per target email.
+    const ip = clientIp(req);
+    if (!rateLimit(`admin-signup:ip:${ip}`, 5, 10 * 60 * 1000) || !rateLimit(`admin-signup:email:${emailNorm}`, 3, 60 * 60 * 1000)) {
+      return NextResponse.json({ error: 'Too many signup attempts. Please try again later.' }, { status: 429 });
+    }
 
-    // 1. Check if user already exists in Firebase Auth
+    // 1. This endpoint only creates brand-new accounts. If the email is already registered we never
+    //    touch it (that would let anyone provision a workspace under, or pre-claim, someone else's account).
+    let uid = '';
     try {
-      const existingUser = await adminAuth.getUserByEmail(emailNorm);
-      uid = existingUser.uid;
-      isExistingAuthUser = true;
+      await adminAuth.getUserByEmail(emailNorm);
+      return NextResponse.json(
+        { error: 'An account with this email already exists. Please log in.' },
+        { status: 409 }
+      );
     } catch (err: unknown) {
       const firebaseError = err as { code?: string };
       if (firebaseError.code !== 'auth/user-not-found') {
         console.error('[AdminSignup] getUserByEmail error:', err);
+        return NextResponse.json({ error: 'Could not create the account. Please try again.' }, { status: 500 });
       }
     }
 
-    // 2. If user already exists in Auth, check if they already have an active workspace
-    if (isExistingAuthUser) {
-      const existingUserDoc = await adminDb.collection('users').doc(uid).get();
-      if (existingUserDoc.exists) {
-        const userData = existingUserDoc.data();
-        if (userData?.currentWorkspaceId) {
-          const wsDoc = await adminDb.collection('workspaces').doc(userData.currentWorkspaceId).get();
-          if (wsDoc.exists) {
-            return NextResponse.json(
-              {
-                error: 'An account with this email already exists. Please log in.',
-              },
-              { status: 409 }
-            );
-          }
-        }
-      }
-    }
-
-    // 3. Create Firebase Auth user if not existing
-    if (!isExistingAuthUser) {
-      try {
-        const newAuthUser = await adminAuth.createUser({
-          email: emailNorm,
-          password: password,
-          displayName: userDisplayName,
-          emailVerified: true,
-        });
-        uid = newAuthUser.uid;
-      } catch (authErr: unknown) {
-        const err = authErr as { code?: string; message?: string };
-        if (err.code === 'auth/email-already-exists') {
-          return NextResponse.json(
-            { error: 'An account with this email already exists. Please log in.' },
-            { status: 409 }
-          );
-        }
+    // 2. Create the Firebase Auth user. The email is NOT marked verified: the client sends a
+    //    verification email after the first sign-in.
+    try {
+      const newAuthUser = await adminAuth.createUser({
+        email: emailNorm,
+        password: password,
+        displayName: userDisplayName,
+        emailVerified: false,
+      });
+      uid = newAuthUser.uid;
+    } catch (authErr: unknown) {
+      const err = authErr as { code?: string; message?: string };
+      if (err.code === 'auth/email-already-exists') {
         return NextResponse.json(
-          { error: err.message || 'Failed to create authentication user.' },
-          { status: 500 }
+          { error: 'An account with this email already exists. Please log in.' },
+          { status: 409 }
         );
       }
+      console.error('[AdminSignup] createUser error:', authErr);
+      return NextResponse.json({ error: 'Failed to create authentication user.' }, { status: 500 });
     }
 
-    // 4. Provisioning Workspace & User atomically
+    // 3. Provision workspace, profile and membership atomically
     const now = new Date().toISOString();
-
-    // Check if user already owns an existing workspace (idempotency check)
-    const existingWorkspacesSnapshot = await adminDb
-      .collection('workspaces')
-      .where('ownerId', '==', uid)
-      .limit(1)
-      .get();
-
-    let workspaceId = '';
-    if (!existingWorkspacesSnapshot.empty) {
-      workspaceId = existingWorkspacesSnapshot.docs[0].id;
-    } else {
-      workspaceId = `ws_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    }
+    const workspaceId = `ws_${randomUUID()}`;
 
     const batch = adminDb.batch();
 
@@ -206,7 +180,7 @@ export async function POST(req: NextRequest) {
     }
     console.error('[AdminSignup] Unexpected error:', error);
     return NextResponse.json(
-      { error: errString || 'An unexpected error occurred during workspace provisioning.' },
+      { error: 'An unexpected error occurred during workspace provisioning.' },
       { status: 500 }
     );
   }

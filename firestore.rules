@@ -2,12 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default rule: Deny everything unless explicitly permitted
+    // Default: deny everything. All writes go through server API routes
+    // (firebase-admin bypasses these rules), so clients are read-only here.
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -16,130 +16,73 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
-    // Check if the authenticated user has an active membership in the given workspace
+    function memberDoc(workspaceId) {
+      return get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid));
+    }
+
     function isWorkspaceMember(workspaceId) {
       return isAuthenticated() &&
         exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.status == 'active';
+        memberDoc(workspaceId).data.status == 'active';
     }
 
-    // Check if the authenticated user is an active Admin in the given workspace
     function isWorkspaceAdmin(workspaceId) {
-      return isAuthenticated() &&
-        isWorkspaceMember(workspaceId) &&
-        get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.role == 'admin';
+      return isWorkspaceMember(workspaceId) &&
+        memberDoc(workspaceId).data.role == 'admin';
     }
 
-    // --- Users Collection: users/{uid} ---
+    // --- users/{uid} ---
+    // Read own profile. Only cosmetic fields may be changed by the client;
+    // role, status, workspace and email are server-managed.
     match /users/{uid} {
-      // Users can read their own profile
       allow read: if isOwner(uid);
-
-      // Creating a user profile document: allow for authenticated owner
-      allow create: if isOwner(uid) &&
-        request.resource.data.uid == uid &&
-        (!('status' in request.resource.data) || request.resource.data.status == 'active');
-
-      // Profile updates: user can update displayName/name, but cannot tamper with uid or disabled status
+      allow create: if false;
       allow update: if isOwner(uid) &&
-        request.resource.data.uid == resource.data.uid &&
-        (!('email' in request.resource.data) || request.resource.data.email == resource.data.email);
-
-      // Direct client deletion of profiles is forbidden
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'updatedAt', 'lastLoginAt']);
       allow delete: if false;
     }
 
-    // --- Workspaces Collection: workspaces/{workspaceId} ---
+    // --- workspaces/{workspaceId} ---
     match /workspaces/{workspaceId} {
-      // Allow active members OR the workspace owner to read workspace data
-      allow read: if isAuthenticated() && (
-        resource.data.ownerId == request.auth.uid ||
-        isWorkspaceMember(workspaceId)
-      );
+      allow read: if isWorkspaceMember(workspaceId);
+      allow write: if false;
 
-      // Workspace creation: allow authenticated owners creating their company workspace
-      allow create: if isAuthenticated() &&
-        request.resource.data.ownerId == request.auth.uid &&
-        request.resource.data.workspaceId == workspaceId &&
-        request.resource.data.status == 'active';
-
-      // Only active workspace Admins or owner can update permitted workspace settings
-      allow update: if isAuthenticated() &&
-        (resource.data.ownerId == request.auth.uid || isWorkspaceAdmin(workspaceId)) &&
-        request.resource.data.ownerId == resource.data.ownerId &&
-        request.resource.data.workspaceId == resource.data.workspaceId;
-
-      // Direct client deletion of workspaces is forbidden
-      allow delete: if false;
-
-      // --- Workspace Memberships: workspaces/{workspaceId}/members/{uid} ---
+      // --- workspaces/{workspaceId}/members/{memberUid} ---
       match /members/{memberUid} {
-        // Active workspace members OR owner can read members of the workspace
-        allow read: if isAuthenticated() && (
-          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid ||
-          isWorkspaceMember(workspaceId)
-        );
-
-        // Allow authenticated owner to create initial admin membership, or member to record their status
-        allow create: if isAuthenticated() &&
-          (request.auth.uid == memberUid || get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid) &&
-          request.resource.data.status == 'active';
-
-        allow update: if isAuthenticated() &&
-          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
-
-        // Direct client deletions of memberships are forbidden
-        allow delete: if false;
+        allow read: if isWorkspaceAdmin(workspaceId) ||
+          (isOwner(memberUid) && isWorkspaceMember(workspaceId));
+        allow write: if false;
       }
     }
 
-    // --- Invitations Collection: invitations/{invitationId} ---
+    // --- invitations: server only ---
     match /invitations/{invitationId} {
-      // Raw client reads of invitation records are restricted to protect token hashes
-      allow read: if false;
-
-      // Creation, updates, acceptance, resend, revoke are managed through server API routes
-      allow create, update, delete: if false;
+      allow read, write: if false;
     }
 
-    // --- Leads Collection: leads/{leadId} ---
+    // --- leads/{leadId}: admins see the workspace, others only leads assigned to them ---
     match /leads/{leadId} {
       allow read: if isAuthenticated() &&
         resource.data.workspaceId != null &&
-        isWorkspaceMember(resource.data.workspaceId);
-
-      allow create: if isAuthenticated() &&
-        request.resource.data.workspaceId != null &&
-        isWorkspaceMember(request.resource.data.workspaceId);
-
-      allow update: if isAuthenticated() &&
-        resource.data.workspaceId != null &&
-        isWorkspaceMember(resource.data.workspaceId) &&
-        request.resource.data.workspaceId == resource.data.workspaceId;
-
-      allow delete: if isAuthenticated() &&
-        resource.data.workspaceId != null &&
-        isWorkspaceAdmin(resource.data.workspaceId);
+        (isWorkspaceAdmin(resource.data.workspaceId) ||
+          (isWorkspaceMember(resource.data.workspaceId) &&
+            resource.data.assignedToId == request.auth.uid));
+      allow write: if false;
     }
 
-    // --- Sequences Collection: sequences/{sequenceId} ---
+    // --- sequences/{sequenceId} ---
     match /sequences/{sequenceId} {
       allow read: if isAuthenticated() &&
         resource.data.workspaceId != null &&
-        isWorkspaceMember(resource.data.workspaceId);
-
-      allow create, update: if isAuthenticated() &&
-        request.resource.data.workspaceId != null &&
-        isWorkspaceMember(request.resource.data.workspaceId);
-
-      allow delete: if isAuthenticated() &&
-        resource.data.workspaceId != null &&
-        isWorkspaceAdmin(resource.data.workspaceId);
+        (isWorkspaceAdmin(resource.data.workspaceId) ||
+          (isWorkspaceMember(resource.data.workspaceId) &&
+            (resource.data.createdByUid == request.auth.uid ||
+              (resource.data.approvalStatus == 'approved' &&
+                resource.data.get('isCustom', false) == false))));
+      allow write: if false;
     }
 
-    // --- Audit Logs Collection: auditLogs/{logId} ---
-    match /auditLogs/{logId} {
-      allow read, write: if false;
-    }
+    // tasks, activities, auditLogs: server only (covered by default deny)
   }
 }
