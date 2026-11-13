@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const viewLogin            = $('view-login');
   const viewEmpty            = $('view-empty');
   const viewLead             = $('view-lead');
+  const viewNetwork          = $('view-network');
 
   // Login Form Elements
   const formLogin            = $('form-login');
@@ -266,6 +267,200 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // ── My Network: connection requests awaiting acceptance ───────────────────────────
+  const netSub        = $('net-sub');
+  const netAllRow     = $('net-all-row');
+  const netSelectAll  = $('net-select-all');
+  const netSelectLbl  = $('net-select-label');
+  const netList       = $('net-list');
+  const netEmpty      = $('net-empty');
+  const netMore       = $('net-more');
+  const btnNetAccept  = $('btn-net-accept');
+  const btnNetRefresh = $('btn-net-refresh');
+  const netBanner     = $('net-banner');
+
+  let networkLeads = [];
+  const selectedIds = new Set();
+
+  const isMyNetworkUrl = (url) =>
+    /^https:\/\/([a-z0-9-]+\.)?linkedin\.com\/mynetwork(\/|\?|#|$)/i.test(url || '');
+
+  function timeAgo(iso) {
+    const t = iso ? Date.parse(iso) : NaN;
+    if (Number.isNaN(t)) return '';
+    const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (mins < 60) return mins <= 1 ? 'just now' : mins + ' min ago';
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + ' h ago';
+    const days = Math.round(hrs / 24);
+    return days === 1 ? 'yesterday' : days + ' days ago';
+  }
+
+  async function signOutExpired() {
+    lfToken = null;
+    lfUser = null;
+    await chrome.storage.local.remove(['lf_token', 'lf_user']);
+    await renderState();
+  }
+
+  // Authenticated JSON call. A 401 means the (1-hour) login expired: sign out and ask the user to log in again.
+  async function apiCall(path, options = {}) {
+    const res = await fetch(cleanUrl(apiEndpoint) + path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + lfToken },
+    });
+    if (res.status === 401) {
+      await signOutExpired();
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+    return data;
+  }
+
+  function showNetBanner(kind, text) {
+    netBanner.className = 'banner ' + kind;
+    netBanner.textContent = text;
+  }
+
+  function syncNetSelection() {
+    const n = selectedIds.size;
+    btnNetAccept.disabled = n === 0;
+    btnNetAccept.textContent = n === 0 ? '✓ Mark selected as accepted' : '✓ Mark ' + n + ' as accepted';
+    netSelectAll.checked = networkLeads.length > 0 && n === networkLeads.length;
+    netSelectAll.indeterminate = n > 0 && n < networkLeads.length;
+    netSelectLbl.textContent = n > 0 ? n + ' selected' : 'Select all';
+    netList.querySelectorAll('.net-row').forEach((row) => row.classList.toggle('checked', selectedIds.has(row.dataset.id)));
+  }
+
+  // Built with DOM nodes + textContent: lead names come from LinkedIn/CSV data and must never be parsed as HTML.
+  function renderNetworkList() {
+    netList.textContent = '';
+    for (const lead of networkLeads) {
+      const row = document.createElement('label');
+      row.className = 'net-row';
+      row.dataset.id = lead.id;
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = selectedIds.has(lead.id);
+      box.addEventListener('change', () => {
+        if (box.checked) selectedIds.add(lead.id);
+        else selectedIds.delete(lead.id);
+        syncNetSelection();
+      });
+
+      const info = document.createElement('div');
+      info.className = 'net-info';
+      const name = document.createElement('div');
+      name.className = 'net-name';
+      name.textContent = (lead.firstName + ' ' + lead.lastName).trim() || 'Unnamed lead';
+      const sub = document.createElement('div');
+      sub.className = 'net-sub';
+      sub.textContent = [lead.jobTitle, lead.company].filter(Boolean).join(' · ');
+      const sent = document.createElement('div');
+      sent.className = 'net-sent';
+      const ago = timeAgo(lead.sentAt);
+      sent.textContent = ago ? 'Request sent ' + ago : 'Request sent';
+      info.append(name, sub, sent);
+
+      row.append(box, info);
+
+      // Only ever link to an https LinkedIn profile.
+      if (typeof lead.linkedinUrl === 'string' && /^https:\/\/([a-z0-9-]+\.)?linkedin\.com\//i.test(lead.linkedinUrl)) {
+        const open = document.createElement('a');
+        open.className = 'net-open';
+        open.href = lead.linkedinUrl;
+        open.target = '_blank';
+        open.rel = 'noopener noreferrer';
+        open.textContent = 'Open ↗';
+        open.title = 'Open LinkedIn profile';
+        open.addEventListener('click', (e) => e.stopPropagation());
+        row.append(open);
+      }
+      netList.append(row);
+    }
+  }
+
+  async function loadPendingConnections() {
+    netBanner.className = 'banner';
+    netSub.textContent = 'Loading…';
+    btnNetRefresh.classList.add('spinning');
+    try {
+      const data = await apiCall('/api/leads/pending-connections?limit=15');
+      networkLeads = Array.isArray(data.leads) ? data.leads : [];
+      const total = Number.isFinite(data.total) ? data.total : networkLeads.length;
+      // Keep only selections that are still in the list.
+      for (const id of Array.from(selectedIds)) if (!networkLeads.some((l) => l.id === id)) selectedIds.delete(id);
+
+      const has = networkLeads.length > 0;
+      netList.style.display = has ? 'block' : 'none';
+      netAllRow.style.display = has ? 'flex' : 'none';
+      netEmpty.style.display = has ? 'none' : 'block';
+      btnNetAccept.style.display = has ? 'block' : 'none';
+      netMore.style.display = total > networkLeads.length ? 'block' : 'none';
+      netMore.textContent = total > networkLeads.length ? 'Showing the latest ' + networkLeads.length + ' of ' + total + ' pending requests.' : '';
+      netSub.textContent = has
+        ? 'Your last ' + networkLeads.length + ' connection request' + (networkLeads.length > 1 ? 's' : '') + ' with no reply yet. Tick the people who accepted.'
+        : 'Nothing waiting.';
+      if (!has) {
+        netEmpty.textContent = '';
+        const strong = document.createElement('strong');
+        strong.textContent = 'No pending requests';
+        netEmpty.append(strong, 'Leads you mark as "connection sent" appear here until they accept.');
+      }
+      renderNetworkList();
+      syncNetSelection();
+    } catch (err) {
+      netSub.textContent = 'Could not load your pending requests.';
+      netList.style.display = 'none';
+      netAllRow.style.display = 'none';
+      netEmpty.style.display = 'none';
+      btnNetAccept.style.display = 'none';
+      showNetBanner('err', err.message || 'Failed to load.');
+    } finally {
+      btnNetRefresh.classList.remove('spinning');
+    }
+  }
+
+  async function markSelectedAccepted() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    btnNetAccept.disabled = true;
+    btnNetAccept.textContent = 'Saving…';
+    try {
+      const data = await apiCall('/api/leads/bulk-actions', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'connection_accepted', ids }),
+      });
+      const done = Array.isArray(data.leads) ? data.leads.length : 0;
+      const errors = Array.isArray(data.errors) ? data.errors : [];
+      ids.forEach((id) => selectedIds.delete(id));
+
+      let text = done + ' marked as accepted.';
+      if (errors.length) {
+        // Group identical reasons ("Connection was already accepted. (2)").
+        const reasons = new Map();
+        errors.forEach((e) => reasons.set(e.message, (reasons.get(e.message) || 0) + 1));
+        text += ' ' + errors.length + ' skipped: ' + Array.from(reasons, ([m, n]) => (n > 1 ? m + ' (' + n + ')' : m)).join(' · ');
+      }
+      await loadPendingConnections(); // refill the list back up to 15
+      showNetBanner(errors.length && done === 0 ? 'err' : 'ok', text);
+    } catch (err) {
+      showNetBanner('err', err.message || 'Could not save.');
+      syncNetSelection();
+    }
+  }
+
+  netSelectAll.addEventListener('change', () => {
+    if (netSelectAll.checked) networkLeads.forEach((l) => selectedIds.add(l.id));
+    else selectedIds.clear();
+    renderNetworkList();
+    syncNetSelection();
+  });
+  btnNetAccept.addEventListener('click', markSelectedAccepted);
+  btnNetRefresh.addEventListener('click', loadPendingConnections);
+
   // Master Render / Routing Function
   async function renderState() {
     // Check if user is authenticated
@@ -278,6 +473,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       viewLogin.style.display  = 'block';
       viewEmpty.style.display  = 'none';
       viewLead.style.display   = 'none';
+      viewNetwork.style.display = 'none';
       return;
     }
 
@@ -295,6 +491,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Check active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    // LinkedIn "My Network": show the connection requests the rep sent that are still unanswered.
+    if (isMyNetworkUrl(tab?.url)) {
+      pillEl.innerText = '● My Network';
+      pillEl.className = 'pill on';
+      viewEmpty.style.display = 'none';
+      viewLead.style.display  = 'none';
+      viewNetwork.style.display = 'block';
+      await loadPendingConnections();
+      return;
+    }
+    viewNetwork.style.display = 'none';
 
     if (!tab?.url?.includes('linkedin.com/in/')) {
       pillEl.innerText = '○ Not on LinkedIn';

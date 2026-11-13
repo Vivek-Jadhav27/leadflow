@@ -279,6 +279,28 @@
       font-size: 10px; color: #0284c7; background: #e0f2fe; padding: 5px 8px; border-radius: 5px; margin-top: 6px;
       line-height: 1.3;
     }
+
+    /* ── My Network: connection requests awaiting acceptance ── */
+    .net-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .net-head h3 { font-size: 13px; font-weight: 700; color: var(--navy); }
+    .net-head p { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .net-all { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--muted);
+      padding: 4px 2px 6px; cursor: pointer; user-select: none; }
+    .net-list { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; max-height: 300px; overflow-y: auto; }
+    .net-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+    .net-row:last-child { border-bottom: none; }
+    .net-row:hover { background: #f8fafc; }
+    .net-row.checked { background: #fff7f4; }
+    .net-row input { flex-shrink: 0; cursor: pointer; }
+    .net-info { min-width: 0; flex: 1; }
+    .net-name { font-size: 12px; font-weight: 700; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .net-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .net-sent { font-size: 10px; color: #94a3b8; margin-top: 1px; }
+    .net-open { flex-shrink: 0; font-size: 10.5px; font-weight: 600; color: #0a66c2; text-decoration: none; padding: 2px 5px; border-radius: 4px; }
+    .net-open:hover { background: #e8f1fb; }
+    .net-empty { text-align: center; padding: 22px 12px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+    .net-empty strong { display: block; color: var(--navy); font-size: 12.5px; margin-bottom: 3px; }
+    .net-more { font-size: 10px; color: var(--muted); text-align: center; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -358,6 +380,29 @@
     <h3>No LinkedIn Profile Open</h3>
     <p>Navigate to any LinkedIn profile to capture this prospect into LeadFlow.</p>
     <a href="https://www.linkedin.com" target="_blank" class="btn-li">Open LinkedIn</a>
+  </div>
+
+  <!-- View 4: LinkedIn "My Network" — requests sent, not accepted yet -->
+  <div id="view-network" style="display:none;">
+    <div class="net-head">
+      <div>
+        <h3>Awaiting acceptance</h3>
+        <p id="net-sub">Loading…</p>
+      </div>
+      <button id="btn-net-refresh" class="btn-refresh" title="Reload the list">↻</button>
+    </div>
+
+    <label class="net-all" id="net-all-row" style="display:none;">
+      <input type="checkbox" id="net-select-all" />
+      <span id="net-select-label">Select all</span>
+    </label>
+
+    <div id="net-list" class="net-list" style="display:none;"></div>
+    <div id="net-empty" class="net-empty" style="display:none;"></div>
+    <div id="net-more" class="net-more" style="display:none;"></div>
+
+    <button type="button" id="btn-net-accept" class="btn-add" disabled>✓ Mark selected as accepted</button>
+    <div id="net-banner" class="banner"></div>
   </div>
 
   <!-- View 3: Profile Detected & Ready (Logged In) -->

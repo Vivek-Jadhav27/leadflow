@@ -8,7 +8,7 @@ import type { Query, DocumentData } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceMember } from '@/lib/serverAuth';
 import { buildCreationExtras, deleteLeadDependents, getContext } from '@/lib/crmEngine';
-import { buildActivity, buildTask, isDateString } from '@/lib/crmPlanner';
+import { AWAITING_CONNECTION, buildActivity, buildTask, isDateString } from '@/lib/crmPlanner';
 import {
   MAX_BATCH,
   canAccessLead,
@@ -235,6 +235,7 @@ export async function POST(req: NextRequest) {
       currentStepNumber,
       totalSteps: Number.isInteger(body.totalSteps) && body.totalSteps > 0 ? Math.min(body.totalSteps, 50) : existing?.totalSteps || 4,
       connectionStatus,
+      connectionSentAt: existing?.connectionSentAt || (connectionStatus === 'request_sent' ? now : null),
       outreachStatus,
       disposition: str(body.disposition, 50) || existing?.disposition || 'active',
       notes: str(body.notes, 5000) || (connectionNote ? `Connection note: ${connectionNote}` : existing?.notes || 'Added to LeadFlow pipeline'),
@@ -421,6 +422,9 @@ export async function PATCH(req: NextRequest) {
       }
       if ('connectionStatus' in result.updates && !CONNECTION_STATUSES.includes(result.updates.connectionStatus as string)) {
         return json({ error: 'Invalid connectionStatus.' }, 400);
+      }
+      if (AWAITING_CONNECTION.includes(result.updates.connectionStatus as string) && !snap.data()?.connectionSentAt) {
+        result.updates.connectionSentAt = now; // lets the extension list "sent, not accepted" newest first
       }
       if ('nextFollowUpDate' in result.updates && result.updates.nextFollowUpDate !== null && !isDateString(result.updates.nextFollowUpDate)) {
         return json({ error: 'nextFollowUpDate must be YYYY-MM-DD or null.' }, 400);

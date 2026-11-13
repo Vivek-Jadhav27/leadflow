@@ -480,9 +480,6 @@ export default function LeadsPage() {
               {filteredLeads.length}
             </span>
           </div>
-          <p className="text-xs text-[#516f90] mt-0.5">
-            Capture, verify duplicates, inspect LinkedIn connection states, and track journey outcomes.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -564,7 +561,7 @@ export default function LeadsPage() {
               className="rounded-md border border-[#cbd8eb] bg-white px-2.5 py-1.5 text-xs text-[#33475b] focus:outline-none"
             >
               <option value="all">All Connection States</option>
-              <option value="connected">Connected (Decision 2 Gate)</option>
+              <option value="connected">Connected</option>
               <option value="request_sent">Request Sent</option>
               <option value="request_pending">Pending</option>
               <option value="declined">Declined / Withdrawn</option>

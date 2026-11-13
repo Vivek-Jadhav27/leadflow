@@ -22,6 +22,8 @@ import {
   planAdvance,
   planArchive,
   planAssign,
+  planConnectionAccepted,
+  AWAITING_CONNECTION,
   planConnectionSent,
   planEnroll,
   activeSteps,
@@ -153,6 +155,50 @@ export function markConnectionSent(actor: Actor, leadId: string) {
     const seq = lead.sequenceId ? await readSequence(tx, actor, lead.sequenceId) : null;
     return planConnectionSent(lead, seq, pending, ctx);
   });
+}
+
+export function markConnectionAccepted(actor: Actor, leadId: string) {
+  return runLeadTransition(actor, leadId, async ({ lead, ctx }) => planConnectionAccepted(lead, ctx));
+}
+
+export function markConnectionAcceptedBulk(actor: Actor, leadIds: string[]) {
+  return runMany(actor, leadIds, (id) => markConnectionAccepted(actor, id));
+}
+
+/**
+ * The caller's most recent leads whose connection request was sent but not yet accepted, newest first.
+ * Always the caller's OWN leads (assigned to them), for every role, because this is a personal work list.
+ */
+export async function listPendingConnections(actor: Actor, limit = 15): Promise<{ leads: Doc[]; total: number }> {
+  // One equality-only query per status keeps this index-free.
+  const snaps = await Promise.all(
+    AWAITING_CONNECTION.map((status) =>
+      adminDb
+        .collection('leads')
+        .where('workspaceId', '==', actor.workspaceId)
+        .where('assignedToId', '==', actor.uid)
+        .where('connectionStatus', '==', status)
+        .limit(500)
+        .get()
+    )
+  );
+  const rows = snaps
+    .flatMap((snap) => snap.docs)
+    .map((d) => ({ id: d.id, ...d.data() }) as Doc)
+    .filter((l) => l.disposition !== 'archived')
+    .map((l) => ({
+      id: l.id,
+      firstName: l.firstName || '',
+      lastName: l.lastName || '',
+      jobTitle: l.jobTitle || '',
+      company: l.company || '',
+      linkedinUrl: l.linkedinUrl || '',
+      connectionStatus: l.connectionStatus,
+      // Older leads have no explicit timestamp; fall back to the last change.
+      sentAt: l.connectionSentAt || l.updatedAt || l.createdAt || null,
+    }))
+    .sort((a, b) => String(b.sentAt || '').localeCompare(String(a.sentAt || '')));
+  return { leads: rows.slice(0, Math.max(1, Math.min(limit, 50))), total: rows.length };
 }
 
 export function markConnectionSentBulk(actor: Actor, leadIds: string[]) {

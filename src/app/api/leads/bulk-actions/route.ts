@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest } from 'next/server';
 import { requireWorkspaceMember } from '@/lib/serverAuth';
-import { archiveLeads, assignLeads, enrollLeads, markConnectionSentBulk } from '@/lib/crmEngine';
+import { archiveLeads, assignLeads, enrollLeads, markConnectionAcceptedBulk, markConnectionSentBulk } from '@/lib/crmEngine';
 import { PlanError } from '@/lib/crmPlanner';
 import { actorFrom, readJson, requireString, respond } from '@/lib/crmHttp';
 
@@ -14,6 +14,7 @@ const MAX_IDS = 100;
  *   enroll   { ids, sequenceId|null }
  *   archive  { ids, archived? }
  *   connection_sent { ids }          record that the connection request was sent
+ *   connection_accepted { ids }      record that the prospect accepted
  * Each lead is processed in its own transaction; per-lead failures are reported in `errors`.
  */
 export async function POST(req: NextRequest) {
@@ -32,6 +33,8 @@ export async function POST(req: NextRequest) {
         return assignLeads(actor, ids, requireString(body.memberId, 'memberId'));
       case 'enroll':
         return enrollLeads(actor, ids, body.sequenceId ? requireString(body.sequenceId, 'sequenceId') : null);
+      case 'connection_accepted':
+        return markConnectionAcceptedBulk(actor, ids);
       case 'connection_sent':
         return markConnectionSentBulk(actor, ids);
       case 'archive':

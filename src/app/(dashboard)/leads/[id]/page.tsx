@@ -645,7 +645,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
     if (status === 'connected') {
       title = 'LinkedIn Connection Accepted';
-      desc = `SDR manually confirmed connection acceptance for ${lead.firstName} ${lead.lastName}. Decision 2 Gate cleared.`;
+      desc = `SDR manually confirmed connection acceptance for ${lead.firstName} ${lead.lastName}.`;
     } else if (status === 'pending' || status === 'request_sent') {
       title = 'LinkedIn Connection Request Sent';
       desc = `Connection request sent. Awaiting acceptance from prospect.`;

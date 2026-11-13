@@ -171,6 +171,8 @@ export function planAdvance(
 
   const connectionStatus =
     completedConnect && lead.connectionStatus !== 'connected' ? 'request_sent' : lead.connectionStatus;
+  // Remember when the request went out (used for the "awaiting acceptance" list).
+  const sentStamp = completedConnect && connectionStatus === 'request_sent' && !lead.connectionSentAt ? { connectionSentAt: ctx.now } : {};
 
   const taskUpdates = pendingTasks.map((t) => ({
     id: t.id,
@@ -183,6 +185,7 @@ export function planAdvance(
       leadUpdate: {
         currentStepNumber: steps.length ? steps[steps.length - 1].stepNumber : current,
         connectionStatus,
+        ...sentStamp,
         outreachStatus: 'completed',
         disposition: 'complete_details',
         nextFollowUpDate: null,
@@ -206,6 +209,7 @@ export function planAdvance(
     leadUpdate: {
       currentStepNumber: next.stepNumber,
       connectionStatus,
+      ...sentStamp,
       outreachStatus: next.stepNumber >= 4 ? 'followup_due' : 'in_sequence',
       nextFollowUpDate: dueDate,
       nextActionTitle: next.title,
@@ -383,7 +387,7 @@ export function planConnectionSent(lead: Doc, seq: Doc | null, pendingTasks: Doc
   }
 
   return {
-    leadUpdate: { connectionStatus: 'request_sent', updatedAt: ctx.now },
+    leadUpdate: { connectionStatus: 'request_sent', connectionSentAt: lead.connectionSentAt || ctx.now, updatedAt: ctx.now },
     taskUpdates: [],
     newTasks: [],
     newActivities: [
@@ -391,6 +395,35 @@ export function planConnectionSent(lead: Doc, seq: Doc | null, pendingTasks: Doc
         type: 'connection_request_sent',
         title: 'LinkedIn Connection Request Sent',
         description: `Connection request to ${leadName(lead)} marked as sent. Awaiting acceptance.`,
+      }, ctx),
+    ],
+  };
+}
+
+/** Statuses meaning "request sent, not accepted yet". */
+export const AWAITING_CONNECTION = ['request_sent', 'pending', 'request_pending'];
+
+/**
+ * The prospect accepted the connection request (the rep saw it on LinkedIn and is recording it).
+ * Only records the acceptance: it clears the "connection accepted" gate but does not move the cadence,
+ * so the rep still completes the next step themselves. Safe to repeat.
+ */
+export function planConnectionAccepted(lead: Doc, ctx: PlanContext): Plan {
+  if (lead.disposition === 'archived') throw new PlanError(409, 'LEAD_ARCHIVED', 'Archived leads cannot be updated.');
+  const status = lead.connectionStatus || 'not_started';
+  if (status === 'connected' || status === 'verified') throw new PlanError(409, 'ALREADY_ACCEPTED', 'Connection was already accepted.');
+  if (!AWAITING_CONNECTION.includes(status)) {
+    throw new PlanError(409, 'NOT_SENT', 'No connection request has been sent to this lead yet.');
+  }
+  return {
+    leadUpdate: { connectionStatus: 'connected', connectionAcceptedAt: ctx.now, updatedAt: ctx.now },
+    taskUpdates: [],
+    newTasks: [],
+    newActivities: [
+      buildActivity(lead, {
+        type: 'connection_accepted',
+        title: 'LinkedIn Connection Accepted',
+        description: `${leadName(lead)} accepted the connection request. Confirmed by ${ctx.actor.name}.`,
       }, ctx),
     ],
   };

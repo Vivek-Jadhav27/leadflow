@@ -17,6 +17,7 @@ Capture leads and prospects directly from LinkedIn profiles into your **LeadFlow
 - **🔄 Instant Sequence Enrollment**: Pick which Outreach Sequence to enroll the prospect into (e.g., *LinkedIn 4-Step Outbound*).
 - **⚠️ Duplicate Detection**: Warns you if you've already saved this prospect previously.
 - **🟠 In-Page Floating Quick Button**: Adds a discreet `[+ Add to LeadFlow]` floating button directly on LinkedIn profiles for ultra-fast clipping.
+- **🤝 Pending-connections list on LinkedIn "My Network"**: open the popup on any `linkedin.com/mynetwork` page to see your last 15 connection requests that have not been accepted yet. Tick the people who accepted and click **Mark as accepted** to update LeadFlow.
 - **🔌 Real-Time CRM Sync**: Pushes directly to LeadFlow's `/api/leads` endpoint and appears instantly in your dashboard.
 
 ---
