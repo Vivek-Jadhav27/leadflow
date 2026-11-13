@@ -79,7 +79,9 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     !originalSequence || !isCustomSequence
       ? null
       : (originalSequence.targetLeadId ? leads.find((l) => l.id === originalSequence.targetLeadId) : undefined) ||
-        leads.find((l) => originalSequence.id.startsWith(`seq_custom_${l.id}`)) ||
+        // generated ids are seq_custom_<leadId> (older ones add _<timestamp>): exact match first, then a prefix that ends at the separator
+        leads.find((l) => originalSequence.id === `seq_custom_${l.id}`) ||
+        leads.find((l) => originalSequence.id.startsWith(`seq_custom_${l.id}_`)) ||
         enrolledLeads[0] ||
         null;
 

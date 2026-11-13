@@ -258,7 +258,8 @@ export default function SequencesPage() {
 
           const targetLead = isCustom
             ? (seq.targetLeadId ? leads.find((l) => l.id === seq.targetLeadId) : undefined) ||
-              leads.find((l) => seq.id.startsWith(`seq_custom_${l.id}`)) ||
+              leads.find((l) => seq.id === `seq_custom_${l.id}`) ||
+              leads.find((l) => seq.id.startsWith(`seq_custom_${l.id}_`)) ||
               activeLeadsForSeq[0]
             : null;
 
