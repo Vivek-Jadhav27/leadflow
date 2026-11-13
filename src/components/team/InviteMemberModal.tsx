@@ -319,7 +319,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
                     />
                   </div>
                   <p className="text-[10px] text-[#516f90] mt-1 leading-snug">
-                    Account Executive. Deal closing, pipeline management &amp; personalized cadences.
+                    Account Executive. Deal closing, pipeline management &amp; personalized sequences.
                   </p>
                 </label>
               </div>

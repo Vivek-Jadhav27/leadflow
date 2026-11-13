@@ -121,9 +121,6 @@ export default function TeamPage() {
           <h2 className="text-xl font-bold tracking-tight text-[#33475b]">
             Team Members &amp; Workspace Ownership
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Admin owner controls, member invites, and SDR prospect workload distribution.
-          </p>
         </div>
 
         <Button
@@ -236,9 +233,6 @@ export default function TeamPage() {
               <h3 className="font-bold text-sm text-[#33475b]">
                 Pending Teammate Invitations (Walkthrough Simulation)
               </h3>
-              <p className="text-[11px] text-slate-500">
-                Decision tree branch: Teammate receives invite and can Accept (joins team) or Decline (access not granted).
-              </p>
             </div>
             <span className="text-xs bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded border border-amber-200">
               {pendingInvites.length} Pending
@@ -290,9 +284,6 @@ export default function TeamPage() {
               <h4 className="font-bold text-sm text-[#33475b]">
                 Invite Team Member
               </h4>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Grant SDR or AE access to LeadFlow pipeline workspace.
-              </p>
             </div>
 
             <form onSubmit={handleInvite} className="space-y-3">
@@ -353,9 +344,6 @@ export default function TeamPage() {
               <h4 className="font-bold text-sm text-[#33475b]">
                 Reassign Leads from {reassignMember.name}
               </h4>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Transfer all assigned prospects to another team member.
-              </p>
             </div>
 
             <form onSubmit={handleReassign} className="space-y-3">

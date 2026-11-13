@@ -290,7 +290,6 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
         workspaceId: currentWorkspaceId,
         capturedBy: user?.email || 'bulk_csv_import',
         capturedByUid: user?.uid || null,
-        notes: 'Imported via CSV',
       }));
 
       await bulkCreateLeads(leadsPayload, {
@@ -326,9 +325,6 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
                   Direct Cloud Save
                 </span>
               </h2>
-              <p className="text-xs text-slate-500">
-                Matches LinkedIn Chrome Extension fields. Cloud persisted to Firebase Firestore without browser local storage.
-              </p>
             </div>
           </div>
 
@@ -610,11 +606,11 @@ export function BulkUploadModal({ isOpen, onClose, sequences, team }: BulkUpload
                 </div>
               )}
 
-              {/* Optional Cadence & Assignment Options */}
+              {/* Optional Sequence & Assignment Options */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[#dfe3eb]">
                 <div>
                   <label className="block text-xs font-bold text-[#33475b] mb-1">
-                    Assign Cadence (Optional)
+                    Assign Sequence (Optional)
                   </label>
                   <select
                     value={selectedSequenceId}

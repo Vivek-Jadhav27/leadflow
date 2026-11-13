@@ -22,6 +22,7 @@ import {
   planAdvance,
   planArchive,
   planAssign,
+  stepWaitsForAcceptance,
   planConnectionAccepted,
   AWAITING_CONNECTION,
   planConnectionSent,
@@ -76,15 +77,18 @@ async function readLead(tx: Transaction, actor: Actor, leadId: string): Promise<
   return { id: snap.id, ...data };
 }
 
+/** The lead's open tasks: pending ones, plus steps that are held until the connection is accepted. */
 async function readPendingTasks(tx: Transaction, actor: Actor, leadId: string): Promise<Doc[]> {
-  const snap = await tx.get(
-    adminDb
-      .collection('tasks')
-      .where('workspaceId', '==', actor.workspaceId)
-      .where('leadId', '==', leadId)
-      .where('status', '==', 'pending')
-  );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const open = (status: string) =>
+    tx.get(
+      adminDb
+        .collection('tasks')
+        .where('workspaceId', '==', actor.workspaceId)
+        .where('leadId', '==', leadId)
+        .where('status', '==', status)
+    );
+  const [pending, held] = await Promise.all([open('pending'), open('held')]);
+  return [...pending.docs, ...held.docs].map((d) => ({ id: d.id, ...d.data() }));
 }
 
 async function readSequence(tx: Transaction, actor: Actor, sequenceId: string): Promise<Doc | null> {
@@ -158,7 +162,10 @@ export function markConnectionSent(actor: Actor, leadId: string) {
 }
 
 export function markConnectionAccepted(actor: Actor, leadId: string) {
-  return runLeadTransition(actor, leadId, async ({ lead, ctx }) => planConnectionAccepted(lead, ctx));
+  return runLeadTransition(actor, leadId, async ({ tx, lead, pending, ctx }) => {
+    const seq = lead.sequenceId ? await readSequence(tx, actor, lead.sequenceId) : null;
+    return planConnectionAccepted(lead, seq, pending, ctx);
+  });
 }
 
 export function markConnectionAcceptedBulk(actor: Actor, leadIds: string[]) {
@@ -166,10 +173,17 @@ export function markConnectionAcceptedBulk(actor: Actor, leadIds: string[]) {
 }
 
 /**
- * The caller's most recent leads whose connection request was sent but not yet accepted, newest first.
+ * The caller's leads whose connection request was sent but not yet accepted, newest first.
+ * Without `query` this is the most recent `limit` (default 15). With `query` it searches ALL of the caller's
+ * pending leads by name, company and title (every word must match), up to 50 results.
  * Always the caller's OWN leads (assigned to them), for every role, because this is a personal work list.
  */
-export async function listPendingConnections(actor: Actor, limit = 15): Promise<{ leads: Doc[]; total: number }> {
+export async function listPendingConnections(
+  actor: Actor,
+  limit = 15,
+  query = ''
+): Promise<{ leads: Doc[]; total: number }> {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 5);
   // One equality-only query per status keeps this index-free.
   const snaps = await Promise.all(
     AWAITING_CONNECTION.map((status) =>
@@ -186,19 +200,24 @@ export async function listPendingConnections(actor: Actor, limit = 15): Promise<
     .flatMap((snap) => snap.docs)
     .map((d) => ({ id: d.id, ...d.data() }) as Doc)
     .filter((l) => l.disposition !== 'archived')
+    .filter((l) => {
+      if (words.length === 0) return true;
+      const haystack = `${l.firstName || ''} ${l.lastName || ''} ${l.company || ''} ${l.jobTitle || ''}`.toLowerCase();
+      return words.every((w) => haystack.includes(w));
+    })
     .map((l) => ({
       id: l.id,
       firstName: l.firstName || '',
       lastName: l.lastName || '',
       jobTitle: l.jobTitle || '',
       company: l.company || '',
-      linkedinUrl: l.linkedinUrl || '',
       connectionStatus: l.connectionStatus,
       // Older leads have no explicit timestamp; fall back to the last change.
       sentAt: l.connectionSentAt || l.updatedAt || l.createdAt || null,
     }))
     .sort((a, b) => String(b.sentAt || '').localeCompare(String(a.sentAt || '')));
-  return { leads: rows.slice(0, Math.max(1, Math.min(limit, 50))), total: rows.length };
+  const cap = words.length ? 50 : Math.max(1, Math.min(limit, 50));
+  return { leads: rows.slice(0, cap), total: rows.length };
 }
 
 export function markConnectionSentBulk(actor: Actor, leadIds: string[]) {
@@ -268,7 +287,7 @@ async function runMany(actor: Actor, ids: string[], run: (id: string) => Promise
 }
 
 /**
- * A rep proposes a bespoke cadence for one lead. The sequence is created pending admin approval and the
+ * A rep proposes a bespoke sequence for one lead. The sequence is created pending admin approval and the
  * lead is parked in 'pending_sequence_approval' at step 2 (its connection request was already sent).
  */
 export async function submitCustomSequence(
@@ -277,7 +296,7 @@ export async function submitCustomSequence(
   input: { name?: unknown; steps?: unknown; connectionNote?: unknown }
 ): Promise<EngineResult> {
   const steps = sanitizeSteps(input.steps);
-  if (!steps || steps.length < 2) throw new PlanError(400, 'BAD_SEQUENCE', 'A custom cadence needs at least two steps.');
+  if (!steps || steps.length < 2) throw new PlanError(400, 'BAD_SEQUENCE', 'A custom sequence needs at least two steps.');
   const ctx = await makeContext(actor);
   const seqId = `seq_custom_${leadId}`;
 
@@ -289,13 +308,13 @@ export async function submitCustomSequence(
       throw new PlanError(409, 'SEQUENCE_CONFLICT', 'Sequence id conflict.');
     }
 
-    const name = (typeof input.name === 'string' && input.name.trim() ? input.name.trim() : `Custom Cadence: ${lead.firstName} ${lead.lastName}`).slice(0, 200);
+    const name = (typeof input.name === 'string' && input.name.trim() ? input.name.trim() : `Custom Sequence: ${lead.firstName} ${lead.lastName}`).slice(0, 200);
     const note = typeof input.connectionNote === 'string' ? input.connectionNote.trim().slice(0, 1000) : '';
     const sequence: Doc = {
       id: seqId,
       name,
       channel: 'linkedin',
-      description: `Custom outreach cadence created by ${actor.email} for ${lead.firstName} ${lead.lastName} at ${lead.company}`,
+      description: `Custom outreach sequence created by ${actor.email} for ${lead.firstName} ${lead.lastName} at ${lead.company}`,
       steps,
       status: 'pending_approval',
       approvalStatus: 'pending',
@@ -329,13 +348,13 @@ export async function submitCustomSequence(
       connectionNote: note || lead.connectionNote || null,
       updatedAt: ctx.now,
     };
-    // The "draft a follow-up cadence" to-do is satisfied by submitting one.
+    // The "draft a follow-up sequence" to-do is satisfied by submitting one.
     const taskUpdates = pending
-      .filter((t) => t.type === 'manual_review' && /^Draft Follow-up Cadence/i.test(t.title || ''))
+      .filter((t) => t.type === 'manual_review' && /^Draft Follow-up (Cadence|Sequence)/i.test(t.title || ''))
       .map((t) => ({ id: t.id, data: { status: 'completed', completedAt: ctx.now, updatedAt: ctx.now } }));
     const activity = buildActivity(lead, {
       type: 'sequence_assigned',
-      title: 'Custom Cadence Submitted for Admin Approval',
+      title: 'Custom Sequence Submitted for Admin Approval',
       description: `Bespoke ${steps.length}-step sequence "${name}" submitted for Admin approval by ${actor.email}.`,
     }, ctx);
 
@@ -477,6 +496,12 @@ export async function updateTask(
       if (leadSnap.exists && ld && ld.workspaceId === actor.workspaceId) lead = { id: leadSnap.id, ...ld };
     }
 
+    // A held step is waiting for the prospect to accept the connection. It is scheduled automatically on
+    // acceptance, so it cannot be completed, re-opened or re-dated by hand (cancelling or skipping is fine).
+    if (task.status === 'held' && !(status === 'cancelled' || status === 'skipped') && (status !== undefined || patch.dueDate !== undefined)) {
+      throw new PlanError(409, 'HELD', 'This step is waiting for the connection to be accepted. It is scheduled automatically once the prospect accepts.');
+    }
+
     // Completing the live step task advances the sequence in the same transaction.
     if (status === 'completed' && task.status !== 'completed') {
       if (lead && shouldAdvanceOnComplete(task, lead)) {
@@ -502,7 +527,7 @@ export async function updateTask(
       return { tasks: [{ ...task, ...update }], activities };
     }
 
-    // Re-opening a task that already drove the lead forward would desync the cadence.
+    // Re-opening a task that already drove the lead forward would desync the sequence.
     if (status === 'pending' && task.status === 'completed' && lead && task.sequenceId && Number.isInteger(task.stepNumber)) {
       if (lead.sequenceId === task.sequenceId && lead.currentStepNumber > task.stepNumber) {
         throw new PlanError(409, 'ALREADY_ADVANCED', 'This step was already completed and the lead has moved on.');
@@ -553,7 +578,8 @@ export function buildCreationExtras(lead: Doc, seq: Doc | null, ctx: PlanContext
     if (step) {
       // A lead that arrives with its connection already sent starts at step 2 (due after the step delay).
       const due = step.stepNumber > 1 ? addDays(ctx.today, step.delayDays ?? 3) : ctx.today;
-      tasks.push(buildStepTask(lead, seq, step, due, ctx));
+      // Not accepted yet: the follow-up is held and scheduled when the prospect accepts.
+      tasks.push(buildStepTask(lead, seq, step, due, ctx, stepWaitsForAcceptance(seq, step, lead.connectionStatus)));
     }
   }
   return { tasks, activities };

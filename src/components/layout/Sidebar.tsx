@@ -52,14 +52,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
       icon: GitBranch,
       isActive: pathname === ROUTES.SEQUENCES || pathname.startsWith('/sequences/'),
     },
-    {
-      label: 'Tasks',
-      href: ROUTES.TASKS,
-      icon: CheckSquare,
-      isActive: pathname === ROUTES.TASKS || pathname.startsWith('/tasks/'),
-    },
     ...(isOwnerOrAdmin
       ? [
+          {
+            label: 'Tasks',
+            href: ROUTES.TASKS,
+            icon: CheckSquare,
+            isActive: pathname === ROUTES.TASKS || pathname.startsWith('/tasks/'),
+          },
           {
             label: 'Team Members',
             href: ROUTES.WORKSPACE_TEAM,

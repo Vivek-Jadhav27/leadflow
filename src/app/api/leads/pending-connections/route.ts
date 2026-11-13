@@ -17,16 +17,18 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
-// GET /api/leads/pending-connections?limit=15
+// GET /api/leads/pending-connections?limit=15&q=term
 // The caller's own leads whose connection request is sent but not yet accepted, newest first.
+// With q, searches all of them (name / company / title) instead of returning only the latest few.
 export async function GET(req: NextRequest) {
   const auth = await requireWorkspaceMember(req, corsHeaders);
   if (auth.response) return auth.response;
   const actor = actorFrom(auth.context);
   const parsed = parseInt(req.nextUrl.searchParams.get('limit') || '', 10);
+  const q = (req.nextUrl.searchParams.get('q') || '').slice(0, 100);
 
   const res = await respond(
-    async () => ({ success: true, ...(await listPendingConnections(actor, Number.isFinite(parsed) && parsed > 0 ? parsed : 15)) }),
+    async () => ({ success: true, ...(await listPendingConnections(actor, Number.isFinite(parsed) && parsed > 0 ? parsed : 15, q)) }),
     'API /leads/pending-connections'
   );
   Object.entries(corsHeaders).forEach(([k, v]) => res.headers.set(k, v));

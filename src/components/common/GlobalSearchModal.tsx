@@ -63,7 +63,7 @@ export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
     ? sequences.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)).slice(0, 3)
     : [];
 
-  const matchingTasks = q
+  const matchingTasks = q && isAdmin
     ? tasks.filter((t) => t.title.toLowerCase().includes(q) || t.leadName.toLowerCase().includes(q)).slice(0, 3)
     : [];
 
@@ -80,7 +80,7 @@ export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search leads, companies, sequences, tasks... (Esc to close)"
+            placeholder={isAdmin ? 'Search leads, companies, sequences, tasks... (Esc to close)' : 'Search leads, companies, sequences... (Esc to close)'}
             className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-slate-100"
           />
           {query && (

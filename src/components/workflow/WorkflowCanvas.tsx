@@ -66,7 +66,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
   // Selected node for details panel
   const [selectedNode, setSelectedNode] = useState<WorkflowNode | null>(null);
 
-  // Build the node graph based on LinkedIn Decision Cadence
+  // Build the node graph based on LinkedIn Decision Sequence
   const { nodes, edges } = useMemo(() => {
     const NODE_WIDTH = 260;
     const NODE_HEIGHT = 72;
@@ -76,7 +76,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
       {
         id: 'node_start',
         type: 'start',
-        label: 'Lead Enrolled in Cadence',
+        label: 'Lead Enrolled in Sequence',
         subtitle: 'Decision 3 Approved · SDR outreach queued',
         x: CENTER_X,
         y: 40,
@@ -125,7 +125,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
         status: 'terminal',
         leadsCount: enrolledLeads.filter((l) => l.connectionStatus === 'declined').length,
         details: {
-          description: 'Prospect declined or connection timed out. Halts cadence execution per decision tree.',
+          description: 'Prospect declined or connection timed out. Halts sequence execution per decision tree.',
           rules: ['Stops sequence execution', 'Flags lead for SDR review or archive'],
         },
       },
@@ -142,7 +142,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
         status: 'waiting',
         leadsCount: enrolledLeads.filter((l) => l.currentStepNumber === 2 && l.connectionStatus === 'pending').length,
         details: {
-          description: 'Pauses cadence until prospect accepts connection.',
+          description: 'Pauses sequence until prospect accepts connection.',
           rules: ['Explicit acceptance required before messaging', 'Prevents messaging non-connections'],
         },
       },
@@ -186,7 +186,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
         id: 'node_reply_branch',
         type: 'terminal',
         label: 'Reply Received / Meeting',
-        subtitle: 'Halts cadence; alerts SDR for conversation',
+        subtitle: 'Halts sequence; alerts SDR for conversation',
         x: CENTER_X - 320,
         y: 530,
         width: 240,
@@ -231,7 +231,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
         status: 'normal',
         leadsCount: enrolledLeads.filter((l) => l.disposition === 'complete_details').length,
         details: {
-          description: 'Parent stage representing completion of outreach cadence and transition to disposition review.',
+          description: 'Parent stage representing completion of outreach sequence and transition to disposition review.',
           rules: [
             'All scheduled outreach steps are finished',
             'Must branch directly beneath into either Enrich or Archived',
@@ -285,7 +285,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
       { id: 'e6', source: 'node_send_message', target: 'node_reply_branch', label: 'Reply Received', type: 'branch_success' },
       { id: 'e7', source: 'node_send_message', target: 'node_followup', label: 'No Reply (3d)', type: 'solid' },
       { id: 'e8', source: 'node_followup', target: 'node_reply_branch', label: 'Reply Received', type: 'branch_success' },
-      { id: 'e9', source: 'node_followup', target: 'node_complete_details', label: 'Cadence Complete', type: 'solid' },
+      { id: 'e9', source: 'node_followup', target: 'node_complete_details', label: 'Sequence Complete', type: 'solid' },
       // Strict parent-to-child edges directly beneath Complete Details:
       { id: 'e10', source: 'node_complete_details', target: 'node_enrich', label: 'Option: Enrich', type: 'branch_success' },
       { id: 'e11', source: 'node_complete_details', target: 'node_archived', label: 'Option: Archive', type: 'dashed' },
@@ -630,7 +630,7 @@ export function WorkflowCanvas({ sequence, enrolledLeads = [] }: WorkflowCanvasP
             <div className="flex items-center justify-between pb-3 border-b border-[#dfe3eb]">
               <div className="min-w-0">
                 <span className="text-[10px] uppercase font-bold text-[#0091ae]">
-                  Cadence Inspector
+                  Sequence Inspector
                 </span>
                 <h4 className="font-bold text-sm text-[#33475b] truncate">
                   {selectedNode.label}

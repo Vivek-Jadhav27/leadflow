@@ -35,6 +35,7 @@ import { ROUTES } from '@/constants/routes';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { getTodayString } from '@/utils/date';
+import { visibleNotes } from '@/utils/leadNotes';
 
 export function SDRDashboardView() {
   const { user, currentWorkspace, isAdmin } = useAuthContext();
@@ -104,7 +105,7 @@ export function SDRDashboardView() {
         assignedLeads.some((l) => l.id === t.leadId);
       if (!isAssigned) return false;
 
-      const isDueTodayOrOverdue = t.dueDate <= todayStr && t.status !== 'completed' && t.status !== 'skipped';
+      const isDueTodayOrOverdue = t.dueDate <= todayStr && (t.status === 'pending' || t.status === 'overdue');
       const isCompletedToday = t.status === 'completed' && (t.completedAt?.startsWith(todayStr) || t.dueDate === todayStr);
       return isDueTodayOrOverdue || isCompletedToday;
     });
@@ -173,7 +174,7 @@ export function SDRDashboardView() {
         dueDate: task.dueDate,
         isOverdue,
         isCompleted,
-        sequenceTitle: seq?.name || lead.sequenceName || 'LinkedIn Outreach Cadence',
+        sequenceTitle: seq?.name || lead.sequenceName || 'LinkedIn Outreach Sequence',
         stepNumber: stepNum,
         stepTitle: step?.title || '',
         messageTemplate: stepTemplate,
@@ -211,7 +212,7 @@ export function SDRDashboardView() {
         }
 
         const noteSnippet = l.connectionNote
-          ? `Connection sent on LinkedIn with note: "${l.connectionNote}". Click Assign Cadence to select or build follow-up sequence.`
+          ? `Connection sent on LinkedIn with note: "${l.connectionNote}". Click Assign Sequence to select or build follow-up sequence.`
           : 'Connection request sent on LinkedIn. Follow-up sequence needed.';
 
         items.push({
@@ -221,9 +222,9 @@ export function SDRDashboardView() {
           dueDate: l.nextFollowUpDate || todayStr,
           isOverdue: Boolean(l.nextFollowUpDate && l.nextFollowUpDate < todayStr),
           isCompleted: false,
-          sequenceTitle: seq?.name || l.sequenceName || (isNeedsSequence ? 'Cadence Needed' : 'Outreach Cadence'),
+          sequenceTitle: seq?.name || l.sequenceName || (isNeedsSequence ? 'Sequence Needed' : 'Outreach Sequence'),
           stepNumber: stepNum,
-          stepTitle: isNeedsSequence ? 'Draft Follow-up Cadence' : (step?.title || l.nextActionTitle || `Step ${stepNum}`),
+          stepTitle: isNeedsSequence ? 'Draft Follow-up Sequence' : (step?.title || l.nextActionTitle || `Step ${stepNum}`),
           messageTemplate: isNeedsSequence ? noteSnippet : stepTemplate,
         });
       }
@@ -291,8 +292,8 @@ export function SDRDashboardView() {
       !txt ||
       !txt.trim() ||
       txt.toLowerCase().includes('awaiting connection') ||
-      txt.toLowerCase().includes('action scheduled per cadence') ||
-      txt.toLowerCase().includes('click "assign cadence"');
+      /action scheduled per (cadence|sequence)/i.test(txt) ||
+      /click "assign (cadence|sequence)"/i.test(txt);
 
     let template: string | null = null;
     if (item.task?.messageTemplate && !isInternalStatus(item.task.messageTemplate)) {
@@ -350,7 +351,7 @@ export function SDRDashboardView() {
   };
 
   const handleMarkSent = (item: typeof todayItems[0]) => {
-    // Completing a step task advances the cadence on the server; a lead with no open task is advanced directly.
+    // Completing a step task advances the sequence on the server; a lead with no open task is advanced directly.
     if (item.task) {
       void updateTaskStatus(item.task.id, 'completed');
     } else if (item.lead?.id) {
@@ -430,9 +431,6 @@ export function SDRDashboardView() {
             <h1 className="text-xl sm:text-2xl font-black text-[#2d3e50] tracking-tight">
               Today&apos;s Outreach Queue
             </h1>
-            <p className="text-xs sm:text-sm text-[#516f90]">
-              Scheduled LinkedIn messages and follow-ups ready for your execution today.
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -496,7 +494,6 @@ export function SDRDashboardView() {
             </div>
           </div>
           <div className="text-2xl font-bold text-[#2d3e50]">{counts.messagesDue}</div>
-          <p className="text-[11px] text-[#7c98b6] mt-0.5">Initial outreach &amp; cadence msgs</p>
         </div>
 
         {/* Metric 3: Follow-ups Due */}
@@ -508,7 +505,6 @@ export function SDRDashboardView() {
             </div>
           </div>
           <div className="text-2xl font-bold text-[#2d3e50]">{counts.followupsDue}</div>
-          <p className="text-[11px] text-[#7c98b6] mt-0.5">Awaiting follow-up response</p>
         </div>
 
         {/* Metric 4: Completed Today */}
@@ -520,7 +516,6 @@ export function SDRDashboardView() {
             </div>
           </div>
           <div className="text-2xl font-bold text-emerald-700">{counts.completedToday}</div>
-          <p className="text-[11px] text-[#7c98b6] mt-0.5">Sent &amp; cadence steps advanced</p>
         </div>
       </div>
 
@@ -537,9 +532,6 @@ export function SDRDashboardView() {
                   {counts.totalPending} pending
                 </span>
               </h2>
-              <p className="text-xs text-[#516f90] mt-0.5">
-                List of leads you have to send a message or follow up with today.
-              </p>
             </div>
 
             {/* Search Box */}
@@ -677,8 +669,8 @@ export function SDRDashboardView() {
               const initialLetters = (
                 (item.lead.firstName?.[0] || '') + (item.lead.lastName?.[0] || '')
               ).toUpperCase() || 'P';
-              const isCadenceNeeded = item.lead.outreachStatus === 'needs_sequence' || !item.lead.sequenceId || Boolean(item.task?.title?.toLowerCase().includes('cadence'));
-              const personalizedMsg = isCadenceNeeded ? '' : getPersonalizedMessage(item);
+              const isSequenceNeeded = item.lead.outreachStatus === 'needs_sequence' || !item.lead.sequenceId || /draft follow-up (cadence|sequence)/i.test(item.task?.title || '');
+              const personalizedMsg = isSequenceNeeded ? '' : getPersonalizedMessage(item);
               const isCopied = copiedTaskId === item.id;
 
               return (
@@ -689,7 +681,7 @@ export function SDRDashboardView() {
                   }`}
                 >
                   <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                    {/* Left: Lead Profile, Cadence Info, Message Preview */}
+                    {/* Left: Lead Profile, Sequence Info, Message Preview */}
                     <div className="flex items-start gap-3.5 min-w-0 flex-1">
                       {/* Avatar */}
                       <div className="h-10 w-10 rounded-full bg-[#f0f4f8] border border-[#dfe3eb] text-[#2d3e50] flex items-center justify-center font-bold text-xs shrink-0">
@@ -712,10 +704,10 @@ export function SDRDashboardView() {
                           </span>
 
                           {/* Action Type Badge */}
-                          {isCadenceNeeded ? (
+                          {isSequenceNeeded ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-50 text-amber-700 border border-amber-200">
                               <AlertCircle className="h-3 w-3" />
-                              <span>Cadence Needed</span>
+                              <span>Sequence Needed</span>
                             </span>
                           ) : item.type === 'message' ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-[#e5f5f8] text-[#0091ae]">
@@ -752,14 +744,14 @@ export function SDRDashboardView() {
                           )}
                         </div>
 
-                        {/* Job Title & Cadence Step */}
+                        {/* Job Title & Sequence Step */}
                         <div className="flex flex-wrap items-center gap-3 text-xs text-[#516f90]">
                           <span>{item.lead.jobTitle || 'Decision Maker'}</span>
                           <span className="text-[#cbd6e2]">•</span>
-                          {isCadenceNeeded ? (
+                          {isSequenceNeeded ? (
                             <span className="text-amber-700 font-medium flex items-center gap-1">
                               <Layers className="h-3 w-3 text-amber-600" />
-                              Cadence not assigned
+                              Sequence not assigned
                             </span>
                           ) : (
                             <span className="text-[#7c98b6] flex items-center gap-1 font-medium">
@@ -770,7 +762,7 @@ export function SDRDashboardView() {
                         </div>
 
                         {/* Message Preview Box (only for active sequence messages/follow-ups) */}
-                        {!isCadenceNeeded && personalizedMsg && (
+                        {!isSequenceNeeded && personalizedMsg && (
                           <div className="rounded-md border border-[#e2e8f0] bg-[#f8fafc] p-2.5 sm:p-3 text-xs text-[#33475b] relative group/msg">
                             <div className="flex items-center justify-between mb-1 pb-1 border-b border-[#eef2f6]">
                               <span className="text-[10px] font-bold uppercase tracking-wider text-[#0091ae] flex items-center gap-1.5">
@@ -820,19 +812,19 @@ export function SDRDashboardView() {
                               <span>{item.lead.phone}</span>
                             </span>
                           )}
-                          {item.lead.notes && (
+                          {visibleNotes(item.lead.notes) && (
                             <span className="italic truncate max-w-sm">
-                              Note: {item.lead.notes}
+                              Note: {visibleNotes(item.lead.notes)}
                             </span>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Right: Direct Outreach & Cadence Actions */}
+                    {/* Right: Direct Outreach & Sequence Actions */}
                     <div className="flex flex-row lg:flex-col items-center lg:items-end justify-between lg:justify-start gap-2 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-[#f0f4f8]">
-                      {isCadenceNeeded ? (
-                        /* Cadence Needed: ONLY Open LinkedIn + Assign Cadence. NO Reschedule, NO Log Reply, NO Mark Sent! */
+                      {isSequenceNeeded ? (
+                        /* Sequence Needed: ONLY Open LinkedIn + Assign Sequence. NO Reschedule, NO Log Reply, NO Mark Sent! */
                         <>
                           <button
                             type="button"
@@ -851,7 +843,7 @@ export function SDRDashboardView() {
                             title="Assign or customize follow-up sequence"
                           >
                             <Layers className="h-3.5 w-3.5" />
-                            <span>Assign Cadence</span>
+                            <span>Assign Sequence</span>
                           </Link>
                         </>
                       ) : (
@@ -874,7 +866,7 @@ export function SDRDashboardView() {
                                 type="button"
                                 onClick={() => handleMarkSent(item)}
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-xs text-white bg-[#0091ae] hover:bg-[#007a93] transition-colors shadow-xs cursor-pointer"
-                                title="Mark message sent and advance sequence cadence"
+                                title="Mark message sent and advance the sequence"
                               >
                                 <Check className="h-3.5 w-3.5" />
                                 <span>Mark Sent</span>
@@ -1029,7 +1021,7 @@ export function SDRDashboardView() {
 
             <form onSubmit={handleLogReplySubmit} className="space-y-3">
               <p className="text-xs text-[#516f90]">
-                Recording a reply automatically pauses further cadence follow-ups and updates the lead disposition.
+                Recording a reply automatically pauses further sequence follow-ups and updates the lead disposition.
               </p>
 
               <div>

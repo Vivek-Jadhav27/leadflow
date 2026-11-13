@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'LeadFlow - Outbound Lead Management CRM',
-  description: 'LinkedIn outreach cadence CRM inspired by HubSpot.',
+  description: 'LinkedIn outreach sequence CRM inspired by HubSpot.',
 };
 
 export default function RootLayout({

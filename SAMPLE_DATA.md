@@ -15,7 +15,7 @@ This document catalogs all sample, seed, and prototype data utilized throughout 
 7. [Scheduled Tasks](#7-scheduled-tasks)
 8. [Activity Timeline Events](#8-activity-timeline-events)
 9. [Journey Decision Tree Nodes & Transitions](#9-journey-decision-tree-nodes--transitions)
-10. [Visual Cadence Workflow Graph](#10-visual-cadence-workflow-graph)
+10. [Visual Sequence Workflow Graph](#10-visual-sequence-workflow-graph)
 11. [System Constants & Taxonomies](#11-system-constants--taxonomies)
 
 ---
@@ -493,7 +493,7 @@ The application seeds **12 leads** (`SEEDED_LEADS`) representing various lifecyc
   "assignedToId": "user_sarah_connor",
   "assignedToName": "Sarah Connor",
   "assignedToEmail": "sarah@leadflow.io",
-  "notes": "Replied: \"Not interested right now, please remove from cadence.\" Future tasks cancelled after confirmation.",
+  "notes": "Replied: \"Not interested right now, please remove from sequence.\" Future tasks cancelled after confirmation.",
   "createdAt": "2026-10-19T09:30:00Z",
   "updatedAt": "2026-10-24T10:05:00Z"
 }
@@ -524,7 +524,7 @@ The application seeds **12 leads** (`SEEDED_LEADS`) representing various lifecyc
 * **Enrolled Leads Count:** 6
 * **Description:** High-touch multichannel LinkedIn outreach for B2B engineering and product leaders.
 
-#### Steps & Cadence
+#### Steps & Sequence
 1. **Step 1 (Delay 0d):** `connection_request` — Send LinkedIn Connection Request
    > *"Hi {{firstName}}, noticed your team's recent growth at {{company}}. Would love to connect and follow your journey."*
 2. **Step 2 (Delay 2d):** `wait_for_acceptance` — Wait for Connection Acceptance (Decision Gate 2)
@@ -543,7 +543,7 @@ The application seeds **12 leads** (`SEEDED_LEADS`) representing various lifecyc
 * **Enrolled Leads Count:** 4
 * **Description:** Targeted custom sequence for enterprise revenue and security leaders.
 
-#### Steps & Cadence
+#### Steps & Sequence
 1. **Step 1 (Delay 0d):** `connection_request` — Connection Invitation with Industry Note
    > *"Hi {{firstName}}, impressed by your security architecture work at {{company}}. Would appreciate connecting here."*
 2. **Step 2 (Delay 2d):** `wait_for_acceptance` — Wait for Connection Acceptance
@@ -562,9 +562,9 @@ The application seeds **12 leads** (`SEEDED_LEADS`) representing various lifecyc
 * **Enrolled Leads Count:** 0
 * **Description:** Custom SDR sequence awaiting manager approval before launch.
 
-#### Steps & Cadence
+#### Steps & Sequence
 1. **Step 1 (Delay 0d):** `connection_request` — Connect & Reference Download
-   > *"Hi {{firstName}}, saw you downloaded our 2026 B2B Outbound Cadence Guide. Let's connect!"*
+   > *"Hi {{firstName}}, saw you downloaded our 2026 B2B Outbound Sequence Guide. Let's connect!"*
 2. **Step 2 (Delay 1d):** `wait_for_acceptance` — Wait for Connection Acceptance
 3. **Step 3 (Delay 1d):** `send_message` — Offer Implementation Walkthrough
    > *"Thanks for connecting! What was your main priority for {{company}} in the report?"*
@@ -734,20 +734,20 @@ Configured in `src/components/walkthrough/JourneyDecisionTree.tsx` across **20 h
 
 ---
 
-## 10. Visual Cadence Workflow Graph
+## 10. Visual Sequence Workflow Graph
 
 Configured in `src/components/workflow/WorkflowCanvas.tsx` for visual sequence inspection:
 
 ### Workflow Graph Nodes
-1. `node_start` (`start`): Lead Enrolled in Cadence (Decision 3 Approved)
+1. `node_start` (`start`): Lead Enrolled in Sequence (Decision 3 Approved)
 2. `node_conn_request` (`action`): Connection Request (Step 1)
-3. `node_declined_branch` (`terminal`): Declined / Timeout Branch (Stops cadence)
+3. `node_declined_branch` (`terminal`): Declined / Timeout Branch (Stops sequence)
 4. `node_wait_acceptance` (`wait`): Wait for Acceptance (Decision 2 Gate)
 5. `node_conn_accepted` (`condition`): Connection Accepted (Step 2 Network Member)
 6. `node_send_message` (`action`): Manual LinkedIn Message (Step 3 Initial outreach)
-7. `node_reply_branch` (`terminal`): Reply Received / Meeting (Branch to left, halts cadence)
+7. `node_reply_branch` (`terminal`): Reply Received / Meeting (Branch to left, halts sequence)
 8. `node_followup` (`action`): Follow-up Message Nudge (Step 4 Case study nudge)
-9. `node_complete_details` (`stage`): **Parent Stage: Complete Details** (Step 5 Cadence complete)
+9. `node_complete_details` (`stage`): **Parent Stage: Complete Details** (Step 5 Sequence complete)
 10. `node_enrich` (`outcome`): **Child Outcome 1: Enrich** (Branches directly beneath Complete Details)
 11. `node_archived` (`outcome`): **Child Outcome 2: Archived** (Branches directly beneath Complete Details)
 
@@ -760,7 +760,7 @@ Configured in `src/components/workflow/WorkflowCanvas.tsx` for visual sequence i
 * `node_send_message` ➔ `node_reply_branch` *(branch_success, "Reply Received")*
 * `node_send_message` ➔ `node_followup` *(solid, "No Reply (3d)")*
 * `node_followup` ➔ `node_reply_branch` *(branch_success, "Reply Received")*
-* `node_followup` ➔ `node_complete_details` *(solid, "Cadence Complete")*
+* `node_followup` ➔ `node_complete_details` *(solid, "Sequence Complete")*
 * `node_complete_details` ➔ `node_enrich` *(branch_success, "Option: Enrich")*
 * `node_complete_details` ➔ `node_archived` *(dashed, "Option: Archive")*
 

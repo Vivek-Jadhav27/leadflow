@@ -29,7 +29,7 @@ import { str } from '@/lib/leadValidation';
  *   reply     { message?, outcome? }     prospect replied / meeting booked
  *   archive   { archived: boolean }      archive or restore
  *   enrich    { data }                   attach enrichment data
- *   custom_sequence { name?, steps, connectionNote? } propose a bespoke cadence (pending admin approval)
+ *   custom_sequence { name?, steps, connectionNote? } propose a bespoke sequence (pending admin approval)
  *   activity  { type, title, description } append a note to the activity log
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

@@ -63,7 +63,7 @@ export default function SequencesPage() {
   const [newSeqTargetRole, setNewSeqTargetRole] = useState<'all' | 'sdr' | 'ae'>('all');
 
   const filteredSequences = sequences.filter((s) => {
-    // 1. Isolate to current workspace, allowing default_workspace or lead-specific cadences
+    // 1. Isolate to current workspace, allowing default_workspace or lead-specific sequences
     if (
       currentWorkspaceId &&
       s.workspaceId &&
@@ -84,7 +84,7 @@ export default function SequencesPage() {
       const isCreator =
         (user?.uid && s.createdByUid === user.uid) ||
         (user?.email && s.createdBy?.toLowerCase().trim() === user.email.toLowerCase().trim());
-      const isCustomCadence = s.id?.startsWith('seq_custom_');
+      const isCustomSequence = s.id?.startsWith('seq_custom_');
       const isAdminCreated =
         s.createdByRole === 'admin' ||
         !s.createdByUid ||
@@ -92,7 +92,7 @@ export default function SequencesPage() {
         (s.createdBy && s.createdBy.toLowerCase().includes('admin'));
       const matchesTargetRole = !s.targetRole || s.targetRole === 'all' || s.targetRole === role;
 
-      if (!isCreator && !isCustomCadence && !(isAdminCreated && matchesTargetRole)) {
+      if (!isCreator && !isCustomSequence && !(isAdminCreated && matchesTargetRole)) {
         return false;
       }
     }
@@ -160,7 +160,7 @@ export default function SequencesPage() {
       id: `seq_${Date.now()}`,
       name: newSeqName.trim(),
       channel: 'linkedin',
-      description: newSeqDesc.trim() || 'LinkedIn multi-step outbound cadence',
+      description: newSeqDesc.trim() || 'LinkedIn multi-step outbound sequence',
       status: isAdmin ? 'active' : 'draft',
       approvalStatus: isAdmin ? 'approved' : 'pending',
       approvedBy: isAdmin ? (user?.displayName || 'Admin') : undefined,
@@ -197,9 +197,6 @@ export default function SequencesPage() {
           <h2 className="text-xl font-bold tracking-tight text-[#33475b]">
             LinkedIn Outreach Sequences
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Configure approved multi-step LinkedIn messaging cadences aligned with the decision tree.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -255,8 +252,8 @@ export default function SequencesPage() {
             seq.isCustom ||
             seq.id.startsWith('seq_custom_') ||
             Boolean(seq.targetLeadId) ||
-            seq.name.toLowerCase().startsWith('custom cadence') ||
-            seq.name.toLowerCase().includes('custom cadence:') ||
+            /^custom (cadence|sequence)/i.test(seq.name) ||
+            /custom (cadence|sequence):/i.test(seq.name) ||
             (seq.description && seq.description.toLowerCase().includes('bespoke 1:1'))
           );
 
@@ -269,7 +266,7 @@ export default function SequencesPage() {
 
           const parsedProspectName = targetLead
             ? `${targetLead.firstName} ${targetLead.lastName}`
-            : (seq.targetLeadName || (isCustom ? seq.name.replace(/^custom cadence:\s*/i, '').trim() : null));
+            : (seq.targetLeadName || (isCustom ? seq.name.replace(/^custom (cadence|sequence):\s*/i, '').trim() : null));
           const parsedCompany = targetLead?.company || seq.targetLeadCompany || (isCustom ? seq.description?.match(/at\s+([^.]+)/i)?.[1]?.trim() : null);
           const parsedLinkedin = targetLead?.linkedinUrl || seq.targetLeadLinkedin;
           const isApproved = seq.approvalStatus === 'approved';
@@ -283,7 +280,7 @@ export default function SequencesPage() {
                 <div className="flex items-center justify-between">
                   <span className="inline-flex items-center gap-1 rounded bg-[#e8f3f8] px-2 py-0.5 text-[10px] font-semibold text-[#0077b5] border border-[#b2d5e5]">
                     <Linkedin className="h-2.5 w-2.5" />
-                    <span>LinkedIn Cadence</span>
+                    <span>LinkedIn Sequence</span>
                   </span>
 
                   {/* Approval Status Badge */}
@@ -315,7 +312,7 @@ export default function SequencesPage() {
                   {isCustom ? (
                     <>
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-200">
-                        1:1 Bespoke Cadence
+                        1:1 Bespoke Sequence
                       </span>
 
                       {/* Creator badge */}
@@ -365,7 +362,7 @@ export default function SequencesPage() {
                   )}
                 </div>
 
-                {/* If bespoke cadence, show Target Lead details and LinkedIn link */}
+                {/* If bespoke sequence, show Target Lead details and LinkedIn link */}
                 {isCustom && parsedProspectName && (
                   <div className="pt-2 border-t border-[#dfe3eb] flex items-center justify-between text-[11px] bg-slate-50/80 -mx-4 -mb-1 px-4 py-2">
                     <div className="truncate max-w-[210px]">
@@ -474,9 +471,6 @@ export default function SequencesPage() {
               <h4 className="font-bold text-sm text-[#33475b]">
                 Create LinkedIn Outreach Sequence
               </h4>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Build a multi-step LinkedIn connection and messaging cadence.
-              </p>
             </div>
 
             <form onSubmit={handleCreateSequence} className="space-y-3">

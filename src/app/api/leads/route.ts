@@ -8,7 +8,7 @@ import type { Query, DocumentData } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { requireWorkspaceMember } from '@/lib/serverAuth';
 import { buildCreationExtras, deleteLeadDependents, getContext } from '@/lib/crmEngine';
-import { AWAITING_CONNECTION, buildActivity, buildTask, isDateString } from '@/lib/crmPlanner';
+import { AWAITING_CONNECTION, AWAITING_NEXT_ACTION, activeSteps, buildActivity, buildTask, isDateString, stepWaitsForAcceptance } from '@/lib/crmPlanner';
 import {
   MAX_BATCH,
   canAccessLead,
@@ -208,12 +208,16 @@ export async function POST(req: NextRequest) {
       isConnSent && sequenceId ? 2 : Number.isInteger(body.currentStepNumber) && body.currentStepNumber >= 0
         ? Math.min(body.currentStepNumber, MAX_CUSTOM_STEPS + 1)
         : existing?.currentStepNumber ?? (sequenceId ? 1 : 0);
+    // A follow-up step after a connection request waits for acceptance, so no due date is set yet.
+    const startStep = seqDoc ? activeSteps(seqDoc).find((st) => st.stepNumber === currentStepNumber) : undefined;
+    const awaitingConnection = Boolean(seqDoc && !existing && stepWaitsForAcceptance(seqDoc, startStep, connectionStatus === 'request_sent' ? 'request_sent' : connectionStatus));
     const defaultFollowUp =
-      isConnSent && sequenceId ? new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0] : null;
+      isConnSent && sequenceId && !awaitingConnection ? new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0] : null;
 
     let defaultActionTitle: string | null = null;
-    if (outreachStatus === 'needs_sequence') defaultActionTitle = 'Draft Follow-up Cadence';
+    if (outreachStatus === 'needs_sequence') defaultActionTitle = 'Draft Follow-up Sequence';
     else if (outreachStatus === 'pending_sequence_approval') defaultActionTitle = 'Awaiting Admin Approval';
+    else if (awaitingConnection) defaultActionTitle = AWAITING_NEXT_ACTION;
     else if (isConnSent) defaultActionTitle = 'Step 2: Follow-up 1';
 
     const lastName = str(body.lastName, 200) || existing?.lastName || '';
@@ -229,7 +233,7 @@ export async function POST(req: NextRequest) {
       linkedinUrl: linkedinUrl || existing?.linkedinUrl || '',
       channel: 'linkedin' as const,
       sequenceId,
-      sequenceName: isCustomSeq ? `Custom Cadence: ${firstName} ${lastName}`.trim() : sequenceName,
+      sequenceName: isCustomSeq ? `Custom Sequence: ${firstName} ${lastName}`.trim() : sequenceName,
       sequenceMode: isCustomSeq ? 'custom' : existing?.sequenceMode || (sequenceId ? 'approved' : null),
       connectionNote,
       currentStepNumber,
@@ -238,7 +242,7 @@ export async function POST(req: NextRequest) {
       connectionSentAt: existing?.connectionSentAt || (connectionStatus === 'request_sent' ? now : null),
       outreachStatus,
       disposition: str(body.disposition, 50) || existing?.disposition || 'active',
-      notes: str(body.notes, 5000) || (connectionNote ? `Connection note: ${connectionNote}` : existing?.notes || 'Added to LeadFlow pipeline'),
+      notes: str(body.notes, 5000) || (connectionNote ? `Connection note: ${connectionNote}` : existing?.notes || ''),
       capturedBy: existing?.capturedBy || email,
       capturedByUid: existing?.capturedByUid || uid,
       assignedToId: existing?.assignedToId || assignee.uid,
@@ -247,6 +251,7 @@ export async function POST(req: NextRequest) {
       workspaceId,
       nextFollowUpDate: str(body.nextFollowUpDate, 10) || existing?.nextFollowUpDate || defaultFollowUp,
       nextActionTitle: str(body.nextActionTitle, 200) || defaultActionTitle,
+      awaitingConnection,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
@@ -298,9 +303,9 @@ export async function POST(req: NextRequest) {
         adminDb.collection('sequences').doc(customSeqId),
         {
           id: customSeqId,
-          name: `Custom Cadence: ${leadName}`,
+          name: `Custom Sequence: ${leadName}`,
           channel: 'linkedin',
-          description: `Bespoke 1:1 cadence created by ${email} for ${leadName} at ${company}`,
+          description: `Bespoke 1:1 sequence created by ${email} for ${leadName} at ${company}`,
           steps,
           status: 'pending_approval',
           approvalStatus: 'pending',
@@ -349,7 +354,7 @@ export async function POST(req: NextRequest) {
     if (outreachStatus === 'needs_sequence') {
       createdTasks.push(
         buildTask(newLead, {
-          title: `Draft Follow-up Cadence for ${firstName} ${lastName}`.trim(),
+          title: `Draft Follow-up Sequence for ${firstName} ${lastName}`.trim(),
           type: 'manual_review',
           dueDate: planCtx.today,
           notes: connectionNote
@@ -422,6 +427,9 @@ export async function PATCH(req: NextRequest) {
       }
       if ('connectionStatus' in result.updates && !CONNECTION_STATUSES.includes(result.updates.connectionStatus as string)) {
         return json({ error: 'Invalid connectionStatus.' }, 400);
+      }
+      if (result.updates.connectionStatus === 'connected') {
+        return json({ error: 'Use the "connection accepted" action to mark a connection as accepted.' }, 400);
       }
       if (AWAITING_CONNECTION.includes(result.updates.connectionStatus as string) && !snap.data()?.connectionSentAt) {
         result.updates.connectionSentAt = now; // lets the extension list "sent, not accepted" newest first

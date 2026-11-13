@@ -168,9 +168,6 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
             <h3 className="text-base font-bold text-[#2d3e50]">
               {leadToEdit ? 'Edit Prospect Record' : 'Capture LinkedIn Lead'}
             </h3>
-            <p className="text-xs text-[#516f90]">
-              {leadToEdit ? 'Update contact details' : 'LeadFlow Decision 1: Capture and duplicate check'}
-            </p>
           </div>
           <button
             onClick={onClose}
@@ -343,10 +340,10 @@ export function AddLeadDrawer({ isOpen, onClose, leadToEdit }: AddLeadDrawerProp
                 {errors.linkedinUrl && <p className="text-[10px] text-rose-500">{errors.linkedinUrl}</p>}
               </div>
 
-              {/* Outreach Sequence Cadence Selector */}
+              {/* Outreach Sequence Selector */}
               <div className="space-y-1">
                 <label className="font-bold text-[#33475b] flex items-center justify-between">
-                  <span>Outreach Sequence Cadence</span>
+                  <span>Outreach Sequence</span>
                   <span className="text-[10px] text-[#7c98b6] font-normal">Optional</span>
                 </label>
                 <select

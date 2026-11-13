@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       id: seqId,
       name,
       channel: 'linkedin',
-      description: str(body.description, 1000) || existing?.description || 'LinkedIn multi-step outbound cadence',
+      description: str(body.description, 1000) || existing?.description || 'LinkedIn multi-step outbound sequence',
       steps: steps ?? existing?.steps ?? [],
       status,
       approvalStatus,

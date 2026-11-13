@@ -89,9 +89,6 @@ export default function SettingsPage() {
           <h2 className="text-xl font-bold tracking-tight text-[#33475b]">
             Workspace Settings &amp; LinkedIn Quotas
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Operational preferences, LinkedIn safe sending limits, and prototype persistence controls.
-          </p>
         </div>
 
         <Button
@@ -108,7 +105,7 @@ export default function SettingsPage() {
       <div className="flex border-b border-[#dfe3eb] text-xs">
         {[
           { key: 'workspace', label: 'Workspace & Profile', icon: Building2 },
-          { key: 'outreach', label: 'Cadence & Schedule', icon: Sliders },
+          { key: 'outreach', label: 'Sequence & Schedule', icon: Sliders },
           { key: 'limits', label: 'LinkedIn Quotas', icon: Shield },
           { key: 'storage', label: 'Data Management', icon: RotateCcw },
         ].map((tab) => {
@@ -214,11 +211,11 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* TAB 2: Cadence & Schedule */}
+        {/* TAB 2: Sequence & Schedule */}
         {activeTab === 'outreach' && (
           <div className="rounded-lg border border-[#dfe3eb] bg-white p-5 shadow-xs space-y-4">
             <h3 className="font-bold text-sm text-[#33475b] pb-2 border-b border-[#dfe3eb]">
-              LinkedIn Cadence Timing &amp; Lead Assignment
+              LinkedIn Sequence Timing &amp; Lead Assignment
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -288,9 +285,6 @@ export default function SettingsPage() {
             <h3 className="font-bold text-sm text-[#33475b] pb-2 border-b border-[#dfe3eb]">
               Daily LinkedIn Safety Quotas
             </h3>
-            <p className="text-slate-500 text-[11px]">
-              Protects SDR LinkedIn profiles from rate limits and prevents account restrictions.
-            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
@@ -345,9 +339,6 @@ export default function SettingsPage() {
                     <CloudUpload className="h-4 w-4 text-[#ff7a59]" />
                     Firebase Firestore Sync
                   </h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Sync your leads ({leads.length}) and sequences ({sequences.length}) directly into your Firebase Firestore cloud database.
-                  </p>
                 </div>
                 <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
                   Cloud Live
@@ -382,9 +373,6 @@ export default function SettingsPage() {
                   <h4 className="font-bold text-[#33475b]">
                     Backup &amp; Defaults
                   </h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    All leads, tasks and sequences are stored in the cloud database. You can download a JSON backup of your workspace or restore the default preferences.
-                  </p>
                 </div>
                 <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 border border-slate-200">
                   Cloud Database

@@ -2,6 +2,7 @@
 
 import React, { useState, use } from 'react';
 import Link from 'next/link';
+import { visibleNotes } from '@/utils/leadNotes';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -68,6 +69,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     approveSequence,
     addActivityEvent,
     submitCustomSequence,
+    markConnectionAccepted,
+    markConnectionSent,
     loadActivities,
     bulkAssign,
   } = useCRM();
@@ -264,9 +267,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
       return {
         id: seqId,
-        name: lead.sequenceName || `Custom Cadence: ${lead.firstName} ${lead.lastName}`,
+        name: lead.sequenceName || `Custom Sequence: ${lead.firstName} ${lead.lastName}`,
         channel: 'linkedin' as const,
-        description: `Custom outreach cadence for ${lead.firstName} ${lead.lastName} at ${lead.company}`,
+        description: `Custom outreach sequence for ${lead.firstName} ${lead.lastName} at ${lead.company}`,
         approvalStatus: 'pending' as const,
         status: 'pending_approval' as const,
         workspaceId: lead.workspaceId || null,
@@ -297,8 +300,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     await addActivityEvent({
       leadId: lead.id,
       type: 'sequence_rescheduled',
-      title: 'Cadence Start Date Changed',
-      description: `Cadence start date changed from ${oldDate} to ${newDate}. The open step task moved with it.`,
+      title: 'Sequence Start Date Changed',
+      description: `Sequence start date changed from ${oldDate} to ${newDate}. The open step task moved with it.`,
     });
   };
 
@@ -393,7 +396,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
   // Compute scheduled calendar dates for each step in the sequence
   const stepScheduleMap = React.useMemo(() => {
-    if (!sequence || !sequence.steps || !lead) {
+    if (!sequence || !sequence.steps || !lead || lead.awaitingConnection) {
       return new Map<number, { dateStr: string; formatted: string; isPast: boolean; isToday: boolean }>();
     }
 
@@ -498,7 +501,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
   const openCustomSeqModal = () => {
     if (lead) {
-      setCustomSeqName(`Custom Cadence: ${lead.firstName} ${lead.lastName}`);
+      setCustomSeqName(`Custom Sequence: ${lead.firstName} ${lead.lastName}`);
       setStep2Delay(3);
       setStep2Message(
         `Hi ${lead.firstName}, thanks for connecting! Following up to see if you had a moment to review how we help teams at ${lead.company} optimize outbound sales outreach.`
@@ -552,7 +555,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
       }
 
       const submitted = await submitCustomSequence(lead.id, {
-        name: customSeqName.trim() || `Custom Cadence: ${lead.firstName} ${lead.lastName}`,
+        name: customSeqName.trim() || `Custom Sequence: ${lead.firstName} ${lead.lastName}`,
         steps: seqSteps,
         connectionNote: connectionNoteSent || lead.connectionNote || null,
       });
@@ -639,38 +642,30 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
   const handleSetConnectionStatus = async (status: ConnectionStatus) => {
     if (!lead) return;
-
-    let title = `LinkedIn Connection: ${status}`;
-    let desc = `Connection status updated to ${status}.`;
-
+    // These two are workflow transitions: the server also moves/releases the next sequence step.
     if (status === 'connected') {
-      title = 'LinkedIn Connection Accepted';
-      desc = `SDR manually confirmed connection acceptance for ${lead.firstName} ${lead.lastName}.`;
-    } else if (status === 'pending' || status === 'request_sent') {
-      title = 'LinkedIn Connection Request Sent';
-      desc = `Connection request sent. Awaiting acceptance from prospect.`;
-    } else if (status === 'declined') {
-      title = 'LinkedIn Connection Declined';
-      desc = `Prospect declined connection request.`;
-    } else if (status === 'not_connected') {
-      title = 'LinkedIn Connection Unknown';
-      desc = `Connection status set to not connected.`;
+      await markConnectionAccepted(lead.id);
+      return;
+    }
+    if (status === 'request_sent' || status === 'pending') {
+      await markConnectionSent(lead.id);
+      return;
     }
 
-    const newAct: ActivityEvent = {
-      id: `act_${Date.now()}_conn`,
-      leadId: lead.id,
-      leadName: `${lead.firstName} ${lead.lastName}`,
-      type: status === 'connected' ? 'connection_accepted' : 'status_changed',
-      title,
-      description: desc,
-      actorName: user?.displayName || (user?.email ? user.email.split('@')[0] : 'SDR'),
-      timestamp: new Date().toISOString(),
-    };
+    // Remaining statuses (declined / not connected / not started...) are plain updates plus a log entry.
+    let title = `LinkedIn Connection: ${status}`;
+    let desc = `Connection status updated to ${status}.`;
+    if (status === 'declined') {
+      title = 'LinkedIn Connection Declined';
+      desc = 'Prospect declined connection request.';
+    } else if (status === 'not_connected') {
+      title = 'LinkedIn Connection Unknown';
+      desc = 'Connection status set to not connected.';
+    }
 
     const updated = await updateLead(lead.id, { connectionStatus: status });
     if (!updated) return;
-    await addActivityEvent({ leadId: lead.id, type: newAct.type, title, description: desc });
+    await addActivityEvent({ leadId: lead.id, type: 'status_changed', title, description: desc });
   };
 
   const handleAdvanceStep = () => {
@@ -761,7 +756,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
               className="h-8 text-xs gap-1.5 border-[#0091ae] text-[#0091ae] hover:bg-[#f0f9fb] font-medium"
             >
               <Send className="h-3.5 w-3.5" />
-              <span>Advance Cadence (Step {lead.currentStepNumber + 1})</span>
+              <span>Advance Sequence (Step {lead.currentStepNumber + 1})</span>
             </Button>
           )}
 
@@ -957,7 +952,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
           <div className="p-2.5 rounded bg-white border border-[#dfe3eb]">
             <p className="text-[10px] font-bold uppercase text-slate-400">Decision 3</p>
-            <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Approved Cadence</p>
+            <p className="font-bold text-[#33475b] text-[11px] mt-0.5">Approved Sequence</p>
             <span className="inline-block mt-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
               Active ({sequence?.name || 'Standard'})
             </span>
@@ -973,7 +968,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   : 'text-[#0091ae] bg-[#e6f4f8] border-[#b2d5e5]'
               }`}
             >
-              {lead.outreachStatus === 'replied' ? 'Reply Recorded' : lead.outreachStatus === 'completed' ? 'Cadence Complete' : `Step ${lead.currentStepNumber} Active`}
+              {lead.outreachStatus === 'replied' ? 'Reply Recorded' : lead.outreachStatus === 'completed' ? 'Sequence Complete' : `Step ${lead.currentStepNumber} Active`}
             </span>
           </div>
 
@@ -1010,9 +1005,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
               <span className="text-[10px] text-slate-400">Decision 2</span>
             </div>
 
-            <p className="text-[11px] text-slate-500">
-              Outreach cadences require verified connection acceptance. Update status as prospect responds:
-            </p>
 
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -1082,9 +1074,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
               <span className="text-[10px] text-slate-400">Terminal State</span>
             </div>
 
-            <p className="text-[11px] text-slate-500">
-              Update the sales outcome per the interactive walkthrough branches:
-            </p>
 
             <div className="space-y-1.5">
               {[
@@ -1156,11 +1145,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   <p className="font-medium text-[#33475b] mt-0.5">{formatDate(lead.createdAt)}</p>
                 </div>
 
-                {lead.notes && (
+                {visibleNotes(lead.notes) && (
                   <div className="pt-2 border-t border-[#dfe3eb]">
                     <span className="text-[10px] uppercase font-semibold text-slate-400">Internal SDR Notes</span>
                     <p className="text-[11px] text-slate-700 bg-[#f5f8fa] p-2.5 rounded border border-[#dfe3eb] mt-1 whitespace-pre-wrap">
-                      {lead.notes}
+                      {visibleNotes(lead.notes)}
                     </p>
                   </div>
                 )}
@@ -1169,9 +1158,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           )}
         </div>
 
-        {/* Center Column (2 spans): Sequence Cadence & Manual Message Actions */}
+        {/* Center Column (2 spans): Sequence & Manual Message Actions */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Active LinkedIn Cadence Progression */}
+          {/* Active LinkedIn Sequence Progression */}
           <div className="rounded-lg border border-[#dfe3eb] bg-white shadow-xs overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#dfe3eb] bg-[#f5f8fa]">
               <div className="flex items-center gap-2">
@@ -1241,13 +1230,15 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                       </span>
                     )}
                   </div>
-                  {isAdmin ? (
+                  {lead.awaitingConnection ? (
+                    <p className="font-bold text-amber-700 mt-0.5 text-xs">Starts once the connection is accepted</p>
+                  ) : isAdmin ? (
                     <input
                       type="date"
                       value={lead.nextFollowUpDate || new Date().toISOString().split('T')[0]}
                       onChange={(e) => handleRescheduleStartDate(e.target.value)}
                       className="mt-1 w-full text-xs font-bold text-[#33475b] bg-white border border-[#cbd8eb] rounded px-2 py-1 focus:outline-none focus:border-[#ff7a59] cursor-pointer shadow-2xs"
-                      title="Admin: Click to change cadence schedule start date"
+                      title="Admin: Click to change sequence schedule start date"
                     />
                   ) : (
                     <p className="font-bold text-[#33475b] mt-0.5">
@@ -1283,14 +1274,14 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="h-4 w-4 text-blue-700" />
-                      <h4 className="font-bold text-xs text-blue-900">Custom Cadence Awaiting Admin Approval</h4>
+                      <h4 className="font-bold text-xs text-blue-900">Custom Sequence Awaiting Admin Approval</h4>
                     </div>
                     <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full uppercase">
                       Approval Pending
                     </span>
                   </div>
                   <p className="text-xs text-blue-800">
-                    This lead was assigned a customized follow-up cadence. Steps are paused until an administrator reviews and approves the sequence.
+                    This lead was assigned a customized follow-up sequence. Steps are paused until an administrator reviews and approves the sequence.
                   </p>
                   {isAdmin && sequence && (
                     <Button
@@ -1301,7 +1292,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                       className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 cursor-pointer gap-1.5"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      <span>Approve & Activate Cadence</span>
+                      <span>Approve & Activate Sequence</span>
                     </Button>
                   )}
                 </div>
@@ -1315,9 +1306,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   </div>
                   <div>
                     <h4 className="font-bold text-[#2d3e50] text-sm">No Outreach Sequence Assigned</h4>
-                    <p className="text-xs text-[#516f90] max-w-md mx-auto mt-0.5">
-                      Assign an approved team cadence or create a custom follow-up sequence for {lead.firstName} and submit for Admin approval.
-                    </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1 max-w-xl mx-auto">
@@ -1328,7 +1316,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                         onChange={(e) => setSelectedSeqToAssign(e.target.value)}
                         className="px-2.5 py-1.5 text-xs rounded border border-[#cbd6e2] bg-white text-[#2d3e50] focus:border-[#ff7a59] focus:outline-hidden flex-1 sm:w-52"
                       >
-                        <option value="">Choose Approved Cadence...</option>
+                        <option value="">Choose Approved Sequence...</option>
                         {sequences
                           .filter((s) => s.approvalStatus === 'approved' || s.status === 'active')
                           .map((s) => (
@@ -1368,10 +1356,10 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 <div className="pt-2">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 pb-1 border-b border-[#dfe3eb]/60">
                     <p className="font-bold text-[#33475b]">
-                      Cadence Steps ({lead.currentStepNumber} of {sequence.steps.length} completed)
+                      Sequence Steps ({lead.currentStepNumber} of {sequence.steps.length} completed)
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
-                      {isAdmin && (
+                      {isAdmin && !lead.awaitingConnection && (
                         <div className="flex items-center gap-1.5 bg-white border border-[#cbd8eb] rounded px-2 py-1 shadow-2xs text-xs">
                           <Calendar className="h-3.5 w-3.5 text-[#ff7a59]" />
                           <span className="text-[10px] font-bold text-slate-500 uppercase">Change Start:</span>
@@ -1380,7 +1368,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                             value={lead.nextFollowUpDate || new Date().toISOString().split('T')[0]}
                             onChange={(e) => handleRescheduleStartDate(e.target.value)}
                             className="text-xs font-bold text-[#33475b] bg-transparent border-0 p-0 focus:outline-none cursor-pointer"
-                            title="Admin: Change start date for this lead's cadence"
+                            title="Admin: Change start date for this lead's sequence"
                           />
                         </div>
                       )}
@@ -1388,6 +1376,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                         <Button
                           size="sm"
                           onClick={handleAdvanceStep}
+                          disabled={Boolean(lead.awaitingConnection)}
+                          title={lead.awaitingConnection ? 'Waiting for the connection to be accepted' : undefined}
                           className="h-7 text-xs bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold cursor-pointer shadow-xs"
                         >
                           <Send className="h-3 w-3 mr-1" />
@@ -1405,25 +1395,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                         const isCompleted = st.stepNumber < lead.currentStepNumber || lead.outreachStatus === 'completed';
                         const isCurrent = st.stepNumber === lead.currentStepNumber && lead.outreachStatus !== 'completed';
                         const sched = stepScheduleMap.get(st.stepNumber);
-
-                        const getActionExplanation = () => {
-                          switch (st.actionType) {
-                            case 'connection_request':
-                              return 'Send LinkedIn connection invite with personalized note';
-                            case 'wait_for_acceptance':
-                              return 'Monitor connection state until accepted (Decision 2 Gate)';
-                            case 'send_message':
-                              return 'Send value proposition outreach message on LinkedIn';
-                            case 'followup':
-                              return 'Send follow-up nudge or case study proof';
-                            case 'complete_details':
-                              return 'Review prospect reply & complete lead outcome evaluation';
-                            case 'wait_delay':
-                              return `Wait ${st.delayDays} day(s) before sending next outreach`;
-                            default:
-                              return st.title;
-                          }
-                        };
 
                         return (
                           <div
@@ -1471,6 +1442,14 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                         <Check className="h-3 w-3 text-emerald-600" />
                                         <span>Completed: {sched?.formatted || 'Done'}</span>
                                       </span>
+                                    ) : isCurrent && lead.awaitingConnection ? (
+                                      <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700 border border-amber-200">
+                                        <Clock className="h-3 w-3 text-amber-600" />
+                                        <span>Waiting for acceptance</span>
+                                        <span className="text-[10px] text-amber-600/80 font-normal">
+                                          ({st.delayDays === 0 ? 'right after' : `+${st.delayDays}d after`})
+                                        </span>
+                                      </span>
                                     ) : isCurrent ? (
                                       <span className="inline-flex items-center gap-1 rounded bg-[#fff0eb] px-2 py-0.5 text-[11px] font-bold text-[#e06545] border border-[#ff7a59]/40 shadow-2xs">
                                         <Clock className="h-3 w-3 text-[#ff7a59] animate-pulse" />
@@ -1482,7 +1461,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                     ) : (
                                       <span className="inline-flex items-center gap-1 rounded bg-[#f5f8fa] px-2 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200">
                                         <Calendar className="h-3 w-3 text-slate-400" />
-                                        <span>Scheduled: {sched?.formatted}</span>
+                                        <span>{sched?.formatted ? `Scheduled: ${sched.formatted}` : 'Scheduled: after acceptance'}</span>
                                         <span className="text-[10px] text-slate-400 font-normal">
                                           ({st.delayDays === 0 ? 'Immediate' : `+${st.delayDays}d delay`})
                                         </span>
@@ -1491,16 +1470,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                   </div>
                                 </div>
 
-                                {/* Scheduled Action Description */}
-                                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                                  <span className="font-semibold text-slate-600">Action:</span>
-                                  <span className={isCurrent ? 'text-slate-700 font-medium' : ''}>
-                                    {getActionExplanation()}
-                                  </span>
-                                </div>
 
                                 {/* Decision 2 Connection Gate Manual Confirmation on Step 2 */}
-                                {isCurrent && st.stepNumber === 2 && (
+                                {isCurrent && (st.stepNumber === 2 || lead.awaitingConnection) && (
                                   <div className="mt-2 p-2 rounded-md border border-[#dfe3eb] text-xs">
                                     {lead.connectionStatus === 'connected' ? (
                                       <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50/80 p-1.5 rounded">
@@ -1681,9 +1653,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             <h4 className="font-bold text-sm text-[#33475b]">
               Record Inbound Prospect Reply
             </h4>
-            <p className="text-slate-500 text-[11px]">
-              Recording a reply marks this lead as an active conversation and stops further automated sequence steps.
-            </p>
             <form onSubmit={handleRecordReply} className="space-y-3">
               <textarea
                 required
@@ -1698,7 +1667,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   Cancel
                 </Button>
                 <Button size="sm" type="submit" className="bg-[#ff7a59] hover:bg-[#e06545] text-white font-semibold">
-                  Record Reply &amp; Halt Cadence
+                  Record Reply &amp; Halt Sequence
                 </Button>
               </div>
             </form>
@@ -1715,9 +1684,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                 <Sparkles className="h-4 w-4 text-amber-500" />
                 <span>Enrich Account Intelligence</span>
               </h4>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Update verified direct contact and tech profile for {lead.company}.
-              </p>
             </div>
 
             <form onSubmit={handleSaveEnrichment} className="space-y-3">
@@ -1799,9 +1765,6 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   <Layers className="h-4 w-4 text-[#ff7a59]" />
                   <span>Create Custom Sequence for {lead.firstName} {lead.lastName}</span>
                 </h3>
-                <p className="text-xs text-[#516f90] mt-0.5">
-                  Design bespoke follow-up steps. Will be submitted to Admin for review and approval.
-                </p>
               </div>
               <button
                 type="button"
@@ -1832,7 +1795,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   required
                   value={customSeqName}
                   onChange={(e) => setCustomSeqName(e.target.value)}
-                  placeholder="e.g. Bespoke Cadence: Allan Brisbane"
+                  placeholder="e.g. Bespoke Sequence: Allan Brisbane"
                   className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:border-[#ff7a59] focus:outline-none"
                 />
               </div>

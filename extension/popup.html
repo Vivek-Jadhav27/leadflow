@@ -211,7 +211,7 @@
     .footer a { color: var(--orange); font-weight: 600; text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
 
-    /* ── Outreach Cadence Card ── */
+    /* ── Outreach Sequence Card ── */
     .outreach-card {
       background: #f8fafc; border: 1px solid var(--border); border-radius: 7px;
       padding: 10px 11px; margin-top: 10px; margin-bottom: 8px;
@@ -295,12 +295,12 @@
     .net-info { min-width: 0; flex: 1; }
     .net-name { font-size: 12px; font-weight: 700; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .net-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-    .net-sent { font-size: 10px; color: #94a3b8; margin-top: 1px; }
-    .net-open { flex-shrink: 0; font-size: 10.5px; font-weight: 600; color: #0a66c2; text-decoration: none; padding: 2px 5px; border-radius: 4px; }
-    .net-open:hover { background: #e8f1fb; }
     .net-empty { text-align: center; padding: 22px 12px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
     .net-empty strong { display: block; color: var(--navy); font-size: 12.5px; margin-bottom: 3px; }
     .net-more { font-size: 10px; color: var(--muted); text-align: center; margin-top: 6px; }
+    .net-search { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
+      margin-bottom: 8px; background: #fff; }
+    .net-search:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 2px rgba(255,122,89,.15); }
   </style>
 </head>
 <body>
@@ -385,12 +385,12 @@
   <!-- View 4: LinkedIn "My Network" — requests sent, not accepted yet -->
   <div id="view-network" style="display:none;">
     <div class="net-head">
-      <div>
-        <h3>Awaiting acceptance</h3>
-        <p id="net-sub">Loading…</p>
-      </div>
+      <h3>Awaiting acceptance</h3>
       <button id="btn-net-refresh" class="btn-refresh" title="Reload the list">↻</button>
     </div>
+
+    <input id="net-search" class="net-search" type="search" maxlength="100" autocomplete="off"
+           placeholder="Search all pending requests by name or company" />
 
     <label class="net-all" id="net-all-row" style="display:none;">
       <input type="checkbox" id="net-select-all" />
@@ -450,7 +450,7 @@
       <!-- Outreach & Sequence Section -->
       <div class="outreach-card">
         <div class="outreach-header">
-          <label class="outreach-title">Outreach Cadence</label>
+          <label class="outreach-title">Outreach Sequence</label>
           <div class="mode-tabs">
             <button type="button" class="mode-tab active" id="tab-mode-none">No Sequence</button>
             <button type="button" class="mode-tab" id="tab-mode-approved">Pre-Approved</button>
@@ -462,7 +462,7 @@
         <div id="section-none-seq">
           <div style="padding: 8px 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 11px; color: #166534; line-height: 1.4; margin-bottom: 8px;">
             <div style="font-weight: 700; margin-bottom: 2px;">⚡ Capture Lead Only</div>
-            Add this prospect to your CRM now without selecting a cadence. An SDR or AE can assign an approved sequence or create a custom cadence later on the portal.
+            Add this prospect to your CRM now without selecting a sequence. An SDR or AE can assign an approved sequence or create a custom sequence later on the portal.
           </div>
           <div class="fg" style="margin-bottom: 6px;">
             <label for="none-notes">Lead Note (Optional)</label>
@@ -494,7 +494,7 @@
           </label>
         </div>
 
-        <!-- Mode 2: Custom Cadence -->
+        <!-- Mode 2: Custom Sequence -->
         <div id="section-custom-seq" style="display:none;">
           <div class="fg" style="margin-bottom: 6px;">
             <label for="custom-conn-note">Connection Note Sent</label>
@@ -503,8 +503,8 @@
           </div>
 
           <label class="checkbox-row" style="margin-bottom: 6px;">
-            <input type="checkbox" id="chk-finish-cadence-later" checked />
-            <span>Note sent only; draft follow-up cadence later on portal</span>
+            <input type="checkbox" id="chk-finish-sequence-later" checked />
+            <span>Note sent only; draft follow-up sequence later on portal</span>
           </label>
 
           <div id="custom-steps-container" style="display:none;">
@@ -522,7 +522,7 @@
                 <input type="text" id="custom-step3-msg" placeholder="Follow-up message..." />
               </div>
             </div>
-            <p class="custom-hint">ℹ Custom multi-step cadence will be sent for Admin Approval.</p>
+            <p class="custom-hint">ℹ Custom multi-step sequence will be sent for Admin Approval.</p>
           </div>
         </div>
       </div>

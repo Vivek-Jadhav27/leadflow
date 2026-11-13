@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
         connectionStatus: 'not_started',
         outreachStatus: sequenceId ? 'in_sequence' : 'unassigned',
         disposition: 'active',
-        notes: str(item.notes, 5000) || 'Imported via CSV bulk upload',
+        notes: str(item.notes, 5000),
         capturedBy: email,
         capturedByUid: uid,
         assignedToId: assignee.uid,

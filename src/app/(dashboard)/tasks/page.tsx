@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   CheckSquare,
   Plus,
@@ -35,6 +35,12 @@ export default function TasksPage() {
   const searchParams = useSearchParams();
   const initialFilter = searchParams.get('filter') || 'today';
   const { user, isAdmin } = useAuthContext();
+  const router = useRouter();
+
+  // Not available to SDR / AE: send them to their own dashboard.
+  useEffect(() => {
+    if (!isAdmin) router.replace(ROUTES.SDR_DASHBOARD);
+  }, [isAdmin, router]);
 
   const {
     tasks,
@@ -78,7 +84,7 @@ export default function TasksPage() {
     }
 
     if (activeFilter === 'today') {
-      return t.status !== 'completed' && t.status !== 'skipped' && t.dueDate === todayStr;
+      return (t.status === 'pending' || t.status === 'overdue') && t.dueDate === todayStr;
     }
     if (activeFilter === 'overdue') {
       return (t.status === 'overdue' || (t.status === 'pending' && t.dueDate < todayStr));
@@ -132,6 +138,8 @@ export default function TasksPage() {
     void updateTaskStatus(task.id, 'skipped');
   };
 
+  if (!isAdmin) return null;
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -140,9 +148,6 @@ export default function TasksPage() {
           <h2 className="text-xl font-bold tracking-tight text-[#33475b]">
             Tasks &amp; Outreach Execution Queue
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Operational queue for daily manual LinkedIn messages, connection checks, and prospect reply tracking.
-          </p>
         </div>
 
         <Button
@@ -208,7 +213,7 @@ export default function TasksPage() {
                 <th className="px-4 py-3">Due Date</th>
                 <th className="px-3 py-3">Priority</th>
                 <th className="px-4 py-3">Assigned SDR</th>
-                <th className="px-4 py-3 text-right">Cadence Actions</th>
+                <th className="px-4 py-3 text-right">Sequence Actions</th>
               </tr>
             </thead>
 
@@ -454,9 +459,6 @@ export default function TasksPage() {
               <h4 className="font-bold text-sm text-[#33475b]">
                 Create Outreach Task
               </h4>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Add an operational LinkedIn outreach action or follow-up note.
-              </p>
             </div>
 
             <form onSubmit={handleCreateTask} className="space-y-3">

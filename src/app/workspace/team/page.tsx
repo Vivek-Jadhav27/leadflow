@@ -240,9 +240,6 @@ export default function WorkspaceTeamPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-[#2d3e50]">Team & Workspace Access</h1>
-            <p className="text-xs text-[#516f90]">
-              Manage active SDR team members, suspend or remove memberships, and monitor invitation states.
-            </p>
             </div>
 
 

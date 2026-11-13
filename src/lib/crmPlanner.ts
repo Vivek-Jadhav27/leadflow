@@ -103,8 +103,22 @@ export function buildTask(lead: Doc, data: Doc, ctx: PlanContext): Doc {
   };
 }
 
-export function buildStepTask(lead: Doc, seq: Doc, step: Doc, dueDate: string, ctx: PlanContext): Doc {
+/**
+ * A message / follow-up step that comes after a connection-request step cannot start until the prospect
+ * has accepted. Such a step is created "held" and released (with a fresh due date) on acceptance.
+ */
+export function stepWaitsForAcceptance(seq: Doc | null | undefined, step: Doc | undefined, connectionStatus?: string): boolean {
+  if (!seq || !step) return false;
+  if (connectionStatus === 'connected' || connectionStatus === 'verified') return false;
+  if (step.actionType !== 'send_message' && step.actionType !== 'followup') return false;
+  return activeSteps(seq).some((s) => s.actionType === 'connection_request' && s.stepNumber < step.stepNumber);
+}
+
+export const AWAITING_NEXT_ACTION = 'Waiting for connection acceptance';
+
+export function buildStepTask(lead: Doc, seq: Doc, step: Doc, dueDate: string, ctx: PlanContext, held = false): Doc {
   return buildTask(lead, {
+    ...(held ? { status: 'held', heldReason: 'awaiting_connection' } : {}),
     title: `Step ${step.stepNumber}: ${step.title} for ${leadName(lead)}`,
     sequenceId: seq.id,
     stepNumber: step.stepNumber,
@@ -190,6 +204,7 @@ export function planAdvance(
         disposition: 'complete_details',
         nextFollowUpDate: null,
         nextActionTitle: 'Review Lead & Complete Details',
+        awaitingConnection: false,
         updatedAt: ctx.now,
       },
       taskUpdates,
@@ -205,24 +220,29 @@ export function planAdvance(
   }
 
   const dueDate = addDays(ctx.today, next.delayDays ?? 1);
+  // The follow-up must not become due before the prospect accepts: hold it, and schedule it on acceptance.
+  const hold = stepWaitsForAcceptance(seq, next, connectionStatus);
   return {
     leadUpdate: {
       currentStepNumber: next.stepNumber,
       connectionStatus,
       ...sentStamp,
       outreachStatus: next.stepNumber >= 4 ? 'followup_due' : 'in_sequence',
-      nextFollowUpDate: dueDate,
-      nextActionTitle: next.title,
+      nextFollowUpDate: hold ? null : dueDate,
+      nextActionTitle: hold ? AWAITING_NEXT_ACTION : next.title,
+      awaitingConnection: hold,
       updatedAt: ctx.now,
     },
     taskUpdates,
-    newTasks: [buildStepTask(lead, seq, next, dueDate, ctx)],
+    newTasks: [buildStepTask(lead, seq, next, dueDate, ctx, hold)],
     newActivities: [
       completedConnect
         ? buildActivity(lead, {
             type: 'connection_request_sent',
             title: 'LinkedIn Connection Request Sent',
-            description: `Connection invite sent to ${name}. Status updated to Request Sent. Awaiting prospect acceptance.`,
+            description: hold
+              ? `Connection invite sent to ${name}. "${next.title}" starts ${next.delayDays ?? 1} day(s) after the connection is accepted.`
+              : `Connection invite sent to ${name}. Status updated to Request Sent. Awaiting prospect acceptance.`,
           }, ctx)
         : buildActivity(lead, {
             type: 'followup_scheduled',
@@ -233,7 +253,7 @@ export function planAdvance(
   };
 }
 
-/** Enrols a lead in an approved sequence at its first enabled step (re-enrolling restarts the cadence). */
+/** Enrols a lead in an approved sequence at its first enabled step (re-enrolling restarts the sequence). */
 export function planEnroll(lead: Doc, seq: Doc, pendingTasks: Doc[], ctx: PlanContext): Plan {
   if (!isSequenceApproved(seq)) {
     throw new PlanError(409, 'SEQUENCE_NOT_APPROVED', 'Only approved sequences can be assigned to leads.');
@@ -251,6 +271,7 @@ export function planEnroll(lead: Doc, seq: Doc, pendingTasks: Doc[], ctx: PlanCo
       outreachStatus: 'in_sequence',
       nextFollowUpDate: ctx.today,
       nextActionTitle: first.title || 'Step 1 Action',
+      awaitingConnection: false,
       updatedAt: ctx.now,
     },
     taskUpdates: cancelPending(pendingTasks, 'Cancelled: lead was re-enrolled in a sequence.', ctx),
@@ -274,6 +295,7 @@ export function planUnenroll(lead: Doc, pendingTasks: Doc[], ctx: PlanContext): 
       outreachStatus: 'unassigned',
       nextFollowUpDate: null,
       nextActionTitle: null,
+      awaitingConnection: false,
       updatedAt: ctx.now,
     },
     taskUpdates: cancelPending(pendingTasks, 'Cancelled: lead was removed from the sequence.', ctx),
@@ -307,6 +329,7 @@ export function planReply(
       outcome: isMeeting ? 'Meeting Booked' : outcome,
       nextFollowUpDate: null,
       nextActionTitle: isMeeting ? 'Prepare for Meeting' : 'Respond to prospect reply',
+      awaitingConnection: false,
       updatedAt: ctx.now,
     },
     taskUpdates: cancelPending(cancellable, 'Cancelled due to incoming prospect reply.', ctx),
@@ -329,7 +352,7 @@ export function planReply(
 }
 
 /**
- * An admin approved a sequence: leads that were waiting for it (custom cadences created from the
+ * An admin approved a sequence: leads that were waiting for it (custom sequences created from the
  * extension) start at step 2, because the step-1 connection request was already sent on LinkedIn.
  * Returns null for leads that are not waiting.
  */
@@ -340,6 +363,7 @@ export function planActivateAfterApproval(lead: Doc, seq: Doc, pendingTasks: Doc
   if (!step2) return null;
 
   const dueDate = addDays(ctx.today, step2.delayDays ?? 3);
+  const hold = stepWaitsForAcceptance(seq, step2, lead.connectionStatus);
   return {
     leadUpdate: {
       sequenceId: seq.id,
@@ -347,17 +371,20 @@ export function planActivateAfterApproval(lead: Doc, seq: Doc, pendingTasks: Doc
       totalSteps: steps.length,
       outreachStatus: 'in_sequence',
       currentStepNumber: step2.stepNumber,
-      nextActionTitle: step2.title || 'Step 2: Follow-up 1',
-      nextFollowUpDate: lead.nextFollowUpDate || dueDate,
+      nextActionTitle: hold ? AWAITING_NEXT_ACTION : step2.title || 'Step 2: Follow-up 1',
+      nextFollowUpDate: hold ? null : lead.nextFollowUpDate || dueDate,
+      awaitingConnection: hold,
       updatedAt: ctx.now,
     },
     taskUpdates: cancelPending(pendingTasks, 'Cancelled: sequence approved, step scheduled.', ctx),
-    newTasks: [buildStepTask(lead, seq, step2, dueDate, ctx)],
+    newTasks: [buildStepTask(lead, seq, step2, dueDate, ctx, hold)],
     newActivities: [
       buildActivity(lead, {
         type: 'sequence_assigned',
-        title: 'Custom Cadence Approved & Activated',
-        description: `Cadence "${seq.name}" was approved by ${approverName}. Step ${step2.stepNumber} follow-up scheduled for ${dueDate}.`,
+        title: 'Custom Sequence Approved & Activated',
+        description: hold
+          ? `Sequence "${seq.name}" was approved by ${approverName}. Step ${step2.stepNumber} starts after the connection is accepted.`
+          : `Sequence "${seq.name}" was approved by ${approverName}. Step ${step2.stepNumber} follow-up scheduled for ${dueDate}.`,
         actorName: approverName,
       }, ctx),
     ],
@@ -369,7 +396,7 @@ const SENT_OR_BEYOND = ['request_sent', 'pending', 'request_pending', 'connected
 /**
  * The rep sent a LinkedIn connection request outside the app and is recording it.
  * - If the lead is on the connection-request step of its sequence, this completes that step (the same
- *   transition as marking the step task done): the cadence moves on and the next task is scheduled.
+ *   transition as marking the step task done): the sequence moves on and the next task is scheduled.
  * - Otherwise it just records the status and a log entry.
  * Safe to repeat: a lead that is already past this point is rejected, not changed twice.
  */
@@ -405,25 +432,43 @@ export const AWAITING_CONNECTION = ['request_sent', 'pending', 'request_pending'
 
 /**
  * The prospect accepted the connection request (the rep saw it on LinkedIn and is recording it).
- * Only records the acceptance: it clears the "connection accepted" gate but does not move the cadence,
+ * Only records the acceptance: it clears the "connection accepted" gate but does not move the sequence,
  * so the rep still completes the next step themselves. Safe to repeat.
  */
-export function planConnectionAccepted(lead: Doc, ctx: PlanContext): Plan {
+export function planConnectionAccepted(lead: Doc, seq: Doc | null, openTasks: Doc[], ctx: PlanContext): Plan {
   if (lead.disposition === 'archived') throw new PlanError(409, 'LEAD_ARCHIVED', 'Archived leads cannot be updated.');
   const status = lead.connectionStatus || 'not_started';
   if (status === 'connected' || status === 'verified') throw new PlanError(409, 'ALREADY_ACCEPTED', 'Connection was already accepted.');
   if (!AWAITING_CONNECTION.includes(status)) {
     throw new PlanError(409, 'NOT_SENT', 'No connection request has been sent to this lead yet.');
   }
+
+  // Release any step that was waiting for this acceptance. Its delay now counts from acceptance (today).
+  const held = openTasks.filter((t) => t.status === 'held' && t.heldReason === 'awaiting_connection');
+  const taskUpdates = held.map((t) => {
+    const step = seq ? activeSteps(seq).find((st) => st.stepNumber === t.stepNumber) : undefined;
+    return { id: t.id, data: { status: 'pending', heldReason: null, dueDate: addDays(ctx.today, step?.delayDays ?? 1), updatedAt: ctx.now } };
+  });
+  const live = taskUpdates.find((u) => held.find((t) => t.id === u.id)?.stepNumber === lead.currentStepNumber) || taskUpdates[0];
+  const liveStep = live && seq ? activeSteps(seq).find((st) => st.stepNumber === held.find((t) => t.id === live.id)?.stepNumber) : undefined;
+
   return {
-    leadUpdate: { connectionStatus: 'connected', connectionAcceptedAt: ctx.now, updatedAt: ctx.now },
-    taskUpdates: [],
+    leadUpdate: {
+      connectionStatus: 'connected',
+      connectionAcceptedAt: ctx.now,
+      awaitingConnection: false,
+      ...(live ? { nextFollowUpDate: live.data.dueDate, nextActionTitle: liveStep?.title || lead.nextActionTitle || null } : {}),
+      updatedAt: ctx.now,
+    },
+    taskUpdates,
     newTasks: [],
     newActivities: [
       buildActivity(lead, {
         type: 'connection_accepted',
         title: 'LinkedIn Connection Accepted',
-        description: `${leadName(lead)} accepted the connection request. Confirmed by ${ctx.actor.name}.`,
+        description: live
+          ? `${leadName(lead)} accepted the connection request. Confirmed by ${ctx.actor.name}. Next step scheduled for ${live.data.dueDate}.`
+          : `${leadName(lead)} accepted the connection request. Confirmed by ${ctx.actor.name}.`,
       }, ctx),
     ],
   };

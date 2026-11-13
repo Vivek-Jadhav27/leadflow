@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnAdd               = $('btn-add');
   const leadForm             = $('lead-form');
 
-  // Outreach & Cadence Elements
+  // Outreach & Sequence Elements
   const tabModeNone           = $('tab-mode-none');
   const tabModeApproved       = $('tab-mode-approved');
   const tabModeCustom         = $('tab-mode-custom');
@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const chkConnSentApproved   = $('chk-conn-sent-approved');
   const customConnNote        = $('custom-conn-note');
   const charCountVal          = $('char-count-val');
-  const chkFinishCadenceLater = $('chk-finish-cadence-later');
+  const chkFinishSequenceLater = $('chk-finish-sequence-later');
   const customStepsContainer  = $('custom-steps-container');
   const customStep2Delay      = $('custom-step2-delay');
   const customStep2Msg        = $('custom-step2-msg');
@@ -268,7 +268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ── My Network: connection requests awaiting acceptance ───────────────────────────
-  const netSub        = $('net-sub');
+  const netSearch     = $('net-search');
   const netAllRow     = $('net-all-row');
   const netSelectAll  = $('net-select-all');
   const netSelectLbl  = $('net-select-label');
@@ -284,17 +284,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const isMyNetworkUrl = (url) =>
     /^https:\/\/([a-z0-9-]+\.)?linkedin\.com\/mynetwork(\/|\?|#|$)/i.test(url || '');
-
-  function timeAgo(iso) {
-    const t = iso ? Date.parse(iso) : NaN;
-    if (Number.isNaN(t)) return '';
-    const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-    if (mins < 60) return mins <= 1 ? 'just now' : mins + ' min ago';
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return hrs + ' h ago';
-    const days = Math.round(hrs / 24);
-    return days === 1 ? 'yesterday' : days + ' days ago';
-  }
 
   async function signOutExpired() {
     lfToken = null;
@@ -358,36 +347,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       const sub = document.createElement('div');
       sub.className = 'net-sub';
       sub.textContent = [lead.jobTitle, lead.company].filter(Boolean).join(' · ');
-      const sent = document.createElement('div');
-      sent.className = 'net-sent';
-      const ago = timeAgo(lead.sentAt);
-      sent.textContent = ago ? 'Request sent ' + ago : 'Request sent';
-      info.append(name, sub, sent);
+      info.append(name, sub);
 
       row.append(box, info);
-
-      // Only ever link to an https LinkedIn profile.
-      if (typeof lead.linkedinUrl === 'string' && /^https:\/\/([a-z0-9-]+\.)?linkedin\.com\//i.test(lead.linkedinUrl)) {
-        const open = document.createElement('a');
-        open.className = 'net-open';
-        open.href = lead.linkedinUrl;
-        open.target = '_blank';
-        open.rel = 'noopener noreferrer';
-        open.textContent = 'Open ↗';
-        open.title = 'Open LinkedIn profile';
-        open.addEventListener('click', (e) => e.stopPropagation());
-        row.append(open);
-      }
       netList.append(row);
     }
   }
 
+  let loadSeq = 0; // ignore answers that arrive after a newer search was started
   async function loadPendingConnections() {
+    const mySeq = ++loadSeq;
+    const term = netSearch.value.trim();
     netBanner.className = 'banner';
-    netSub.textContent = 'Loading…';
     btnNetRefresh.classList.add('spinning');
     try {
-      const data = await apiCall('/api/leads/pending-connections?limit=15');
+      const qs = term ? '&q=' + encodeURIComponent(term) : '';
+      const data = await apiCall('/api/leads/pending-connections?limit=15' + qs);
+      if (mySeq !== loadSeq) return;
       networkLeads = Array.isArray(data.leads) ? data.leads : [];
       const total = Number.isFinite(data.total) ? data.total : networkLeads.length;
       // Keep only selections that are still in the list.
@@ -398,28 +374,36 @@ document.addEventListener('DOMContentLoaded', async () => {
       netAllRow.style.display = has ? 'flex' : 'none';
       netEmpty.style.display = has ? 'none' : 'block';
       btnNetAccept.style.display = has ? 'block' : 'none';
-      netMore.style.display = total > networkLeads.length ? 'block' : 'none';
-      netMore.textContent = total > networkLeads.length ? 'Showing the latest ' + networkLeads.length + ' of ' + total + ' pending requests.' : '';
-      netSub.textContent = has
-        ? 'Your last ' + networkLeads.length + ' connection request' + (networkLeads.length > 1 ? 's' : '') + ' with no reply yet. Tick the people who accepted.'
-        : 'Nothing waiting.';
+      const more = total > networkLeads.length;
+      netMore.style.display = more ? 'block' : 'none';
+      netMore.textContent = more
+        ? term
+          ? 'Showing ' + networkLeads.length + ' of ' + total + ' matches. Refine your search to narrow it down.'
+          : 'Showing the latest ' + networkLeads.length + ' of ' + total + '. Use the search box to find the others.'
+        : '';
       if (!has) {
         netEmpty.textContent = '';
         const strong = document.createElement('strong');
-        strong.textContent = 'No pending requests';
-        netEmpty.append(strong, 'Leads you mark as "connection sent" appear here until they accept.');
+        strong.textContent = term ? 'No matching requests' : 'No pending requests';
+        netEmpty.append(
+          strong,
+          term
+            ? 'None of your pending connection requests match "' + term + '".'
+            : 'Leads you mark as "connection sent" appear here until they accept.'
+        );
       }
       renderNetworkList();
       syncNetSelection();
     } catch (err) {
-      netSub.textContent = 'Could not load your pending requests.';
+      if (mySeq !== loadSeq) return;
       netList.style.display = 'none';
       netAllRow.style.display = 'none';
       netEmpty.style.display = 'none';
+      netMore.style.display = 'none';
       btnNetAccept.style.display = 'none';
       showNetBanner('err', err.message || 'Failed to load.');
     } finally {
-      btnNetRefresh.classList.remove('spinning');
+      if (mySeq === loadSeq) btnNetRefresh.classList.remove('spinning');
     }
   }
 
@@ -457,6 +441,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     else selectedIds.clear();
     renderNetworkList();
     syncNetSelection();
+  });
+  let searchTimer = null;
+  netSearch.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      selectedIds.clear();
+      loadPendingConnections();
+    }, 300);
   });
   btnNetAccept.addEventListener('click', markSelectedAccepted);
   btnNetRefresh.addEventListener('click', loadPendingConnections);
@@ -675,10 +667,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Finish cadence later toggle
-  if (chkFinishCadenceLater && customStepsContainer) {
-    chkFinishCadenceLater.addEventListener('change', () => {
-      customStepsContainer.style.display = chkFinishCadenceLater.checked ? 'none' : 'block';
+  // Finish sequence later toggle
+  if (chkFinishSequenceLater && customStepsContainer) {
+    chkFinishSequenceLater.addEventListener('change', () => {
+      customStepsContainer.style.display = chkFinishSequenceLater.checked ? 'none' : 'block';
     });
   }
 
@@ -764,7 +756,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       const note = customConnNote ? customConnNote.value.trim() : '';
       const hasCustomFollowUps = Boolean(customStep2Msg?.value.trim() || customStep3Msg?.value.trim());
-      const finishLater = chkFinishCadenceLater ? (chkFinishCadenceLater.checked && !hasCustomFollowUps) : !hasCustomFollowUps;
+      const finishLater = chkFinishSequenceLater ? (chkFinishSequenceLater.checked && !hasCustomFollowUps) : !hasCustomFollowUps;
       const customSteps = !finishLater ? [
         {
           stepNumber: 1,
@@ -795,7 +787,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         connectionNote: note || null,
         notes: note ? `Connection note: ${note}` : null,
         isConnectionSent: Boolean(note),
-        finishCadenceLater: finishLater,
+        finishSequenceLater: finishLater,
         outreachStatus: finishLater ? 'needs_sequence' : 'pending_sequence_approval',
         customSteps,
       };

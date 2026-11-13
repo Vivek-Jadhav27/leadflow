@@ -73,17 +73,17 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
         originalSequence.name.toLowerCase().includes(l.lastName.toLowerCase())
       )
     );
-  const isCustomCadence = Boolean(
+  const isCustomSequence = Boolean(
     originalSequence?.isCustom ||
     originalSequence?.id.startsWith('seq_custom_') ||
-    originalSequence?.name.toLowerCase().includes('custom cadence') ||
+    /custom (cadence|sequence)/i.test(originalSequence?.name || '') ||
     originalSequence?.description?.toLowerCase().includes('bespoke') ||
     targetLead
   );
 
   const displayProspectName = targetLead
     ? `${targetLead.firstName} ${targetLead.lastName}`
-    : (originalSequence?.targetLeadName || originalSequence?.name?.replace(/^custom cadence:\s*/i, '').trim());
+    : (originalSequence?.targetLeadName || originalSequence?.name?.replace(/^custom (cadence|sequence):\s*/i, '').trim());
   const displayCompany = targetLead?.company || originalSequence?.targetLeadCompany || (originalSequence?.description?.match(/at\s+([^.]+)/i)?.[1]?.trim());
   const displayLinkedin = targetLead?.linkedinUrl || originalSequence?.targetLeadLinkedin;
   const displayJobTitle = targetLead?.jobTitle || 'Target Prospect';
@@ -100,7 +100,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
     if (originalSequence) {
       setSeqName(originalSequence.name);
       setSeqDesc(originalSequence.description);
-      setSeqTargetRole(originalSequence.targetRole || (isCustomCadence ? 'sdr' : 'all'));
+      setSeqTargetRole(originalSequence.targetRole || (isCustomSequence ? 'sdr' : 'all'));
 
       const loadedSteps = [...originalSequence.steps];
       if (loadedSteps.length > 0 && targetLead) {
@@ -124,7 +124,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
       }
       setSteps(loadedSteps);
     }
-  }, [originalSequence, targetLead, isCustomCadence]);
+  }, [originalSequence, targetLead, isCustomSequence]);
 
   const isCreator =
     (user?.uid && originalSequence?.createdByUid === user.uid) ||
@@ -267,9 +267,9 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Target Role Selector or Bespoke Badge */}
-          {isCustomCadence ? (
+          {isCustomSequence ? (
             <span className="rounded px-2.5 py-1 text-[10px] font-bold border uppercase tracking-wider bg-amber-50 text-amber-800 border-amber-200">
-              1:1 Bespoke Cadence · SDR Exclusive
+              1:1 Bespoke Sequence · SDR Exclusive
             </span>
           ) : isOwnerOrAdmin ? (
             <div className="flex items-center gap-1.5 text-xs bg-slate-50 px-2 py-1 rounded border border-[#dfe3eb]">
@@ -338,8 +338,8 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </div>
 
-      {/* Target Prospect & Review Card (for 1:1 bespoke lead cadences) */}
-      {(isCustomCadence && displayProspectName) && (
+      {/* Target Prospect & Review Card (for 1:1 bespoke lead sequences) */}
+      {(isCustomSequence && displayProspectName) && (
         <div className="rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50/90 to-slate-50 p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-[#0077b5]/10 text-[#0077b5] border border-[#0077b5]/20 flex items-center justify-center font-bold text-sm shrink-0">
@@ -435,11 +435,8 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
               <div className="flex items-center justify-between pb-2 border-b border-[#dfe3eb]">
                 <div>
                   <h3 className="font-bold text-sm text-[#33475b]">
-                    LinkedIn Action Cadence
+                    LinkedIn Action Sequence
                   </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Each step represents a timed LinkedIn task generated for the assigned SDR.
-                  </p>
                 </div>
                 <Button size="sm" variant="outline" onClick={addStep} className="h-7 text-xs gap-1 border-[#cbd6e2] text-[#0091ae] font-semibold">
                   <Plus className="h-3 w-3" />
@@ -545,7 +542,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                 className="w-full text-xs py-2 border-dashed border-[#cbd6e2] text-slate-600 hover:border-[#ff7a59]"
               >
                 <Plus className="h-3.5 w-3.5 mr-1 text-[#ff7a59]" />
-                <span>Add Next Cadence Step</span>
+                <span>Add Next Sequence Step</span>
               </Button>
             </div>
           </div>
@@ -713,9 +710,6 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                 <h3 className="font-bold text-sm text-[#2d3e50]">
                   Enroll Leads into {originalSequence?.name}
                 </h3>
-                <p className="text-xs text-[#7c98b6]">
-                  Select leads from your workspace pipeline to enroll into this cadence.
-                </p>
               </div>
               <button
                 type="button"

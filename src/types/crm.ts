@@ -81,6 +81,8 @@ export interface Lead {
   nextFollowUpDate?: string | null; // YYYY-MM-DD
   sequenceStartDate?: string | null;
   nextActionTitle?: string | null;
+  /** True while the next step is held until the prospect accepts the connection request. */
+  awaitingConnection?: boolean;
   connectionNote?: string | null;
   sequenceMode?: 'approved' | 'custom' | null;
   customSteps?: SequenceStep[] | null;
@@ -163,6 +165,8 @@ export interface Task {
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'completed' | 'overdue' | 'skipped' | 'held' | 'cancelled';
   completedAt?: string;
+  /** 'awaiting_connection' while status is 'held'. */
+  heldReason?: string | null;
 }
 
 export interface ActivityEvent {

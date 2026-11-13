@@ -574,7 +574,7 @@ export default function LeadsPage() {
               className="rounded-md border border-[#cbd8eb] bg-white px-2.5 py-1.5 text-xs text-[#33475b] focus:outline-none"
             >
               <option value="all">All Outcomes</option>
-              <option value="in_sequence">In Active Cadence</option>
+              <option value="in_sequence">In Active Sequence</option>
               <option value="followup_due">Follow-up Due</option>
               <option value="replied">Reply Received</option>
               <option value="meeting_booked">Meeting Booked</option>

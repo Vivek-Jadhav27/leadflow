@@ -255,7 +255,7 @@ const NODES_DATA: Record<string, NodeData> = {
     title: 'Choose sequence',
     sub: 'Standard or custom · LinkedIn',
     status: 'Not assigned',
-    desc: 'The member selects a standard or custom sequence, chooses the cadence, and reviews follow-up timing.',
+    desc: 'The member selects a standard or custom sequence and reviews follow-up timing.',
     actions: [
       ['Standard sequence', 'Use a prepared template.', 'blue', 'approval'],
       ['Custom sequence', 'Build personalized steps.', 'blue', 'approval'],

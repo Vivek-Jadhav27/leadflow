@@ -223,9 +223,20 @@ export function useCRM() {
     [leadAction]
   );
 
+  const markConnectionAccepted = useCallback(
+    (id: string) =>
+      leadAction(id, { action: 'connection_accepted' }, (l) => (l?.nextFollowUpDate ? `Connection accepted. Next step scheduled for ${l.nextFollowUpDate}.` : 'Connection accepted.'), 'Failed to mark connection accepted'),
+    [leadAction]
+  );
+
+  const markConnectionSent = useCallback(
+    (id: string) => leadAction(id, { action: 'connection_sent' }, () => 'Marked connection request as sent.', 'Failed to mark connection sent'),
+    [leadAction]
+  );
+
   const submitCustomSequence = useCallback(
     (leadId: string, input: { name?: string; steps: unknown[]; connectionNote?: string | null }) =>
-      leadAction(leadId, { action: 'custom_sequence', ...input }, () => 'Custom cadence submitted for Admin approval', 'Failed to submit cadence'),
+      leadAction(leadId, { action: 'custom_sequence', ...input }, () => 'Custom sequence submitted for Admin approval', 'Failed to submit sequence'),
     [leadAction]
   );
 
@@ -478,6 +489,8 @@ export function useCRM() {
     bulkAssignSequence,
     assignSequenceToLead,
     submitCustomSequence,
+    markConnectionAccepted,
+    markConnectionSent,
     bulkArchive,
     bulkMarkConnectionSent,
     bulkDelete,

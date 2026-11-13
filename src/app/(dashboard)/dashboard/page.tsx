@@ -62,7 +62,6 @@ export default function DashboardOverviewPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#dfe3eb] pb-4">
           <div>
             <h1 className="text-xl font-bold text-[#2d3e50]">Sales Engine Dashboard</h1>
-            <p className="text-xs text-[#516f90]">Daily outreach execution queue and workspace activity.</p>
           </div>
           <div className="inline-flex rounded-md p-1 bg-[#f0f4f8] border border-[#dfe3eb]">
             <button
@@ -94,7 +93,6 @@ export default function DashboardOverviewPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#dfe3eb] pb-4">
         <div>
           <h1 className="text-xl font-bold text-[#2d3e50]">Sales Engine Dashboard</h1>
-          <p className="text-xs text-[#516f90]">Daily outreach execution queue and workspace activity.</p>
         </div>
         <div className="inline-flex rounded-md p-1 bg-[#f0f4f8] border border-[#dfe3eb]">
           <button
@@ -126,10 +124,6 @@ export default function DashboardOverviewPage() {
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#2d3e50] tracking-tight mb-2">
                 Welcome to {companyName}
               </h1>
-              <p className="text-xs sm:text-sm text-[#516f90] leading-relaxed mb-6">
-                Your workspace has been successfully created. You are signed in as the workspace owner (
-                <strong>{user?.email}</strong>). Follow the quick start actions below to build your sales engine.
-              </p>
 
               <div className="flex flex-wrap items-center gap-3">
                 <button
@@ -167,10 +161,6 @@ export default function DashboardOverviewPage() {
               <h1 className="text-2xl sm:text-3xl font-extrabold text-[#2d3e50] tracking-tight mb-2">
                 Welcome to {companyName}
               </h1>
-              <p className="text-xs sm:text-sm text-[#516f90] leading-relaxed mb-6">
-                You are signed in as a Sales Development Representative (
-                <strong>{user?.email}</strong>). Follow your outreach workflows, engage prospects, and manage your daily tasks.
-              </p>
 
               <div className="flex flex-wrap items-center gap-3">
                 <Link
@@ -189,14 +179,6 @@ export default function DashboardOverviewPage() {
                   <span>View Sequences</span>
                 </Link>
 
-                <Link
-                  href={ROUTES.TASKS}
-                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-md font-semibold text-xs text-[#516f90] hover:text-[#2d3e50] hover:underline"
-                >
-                  <CheckSquare className="h-3.5 w-3.5 text-[#ff7a59]" />
-                  <span>Today&apos;s Tasks</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
               </div>
             </>
           )}
@@ -264,9 +246,6 @@ export default function DashboardOverviewPage() {
           <h3 className="text-lg font-bold text-[#2d3e50] mb-1">
             Your sales team workspace is ready
           </h3>
-          <p className="text-xs text-[#516f90] max-w-md mx-auto mb-6">
-            Start by inviting your SDRs or Account Executives (AEs). Each invited member receives a secure single-use link to join your company&apos;s workspace.
-          </p>
 
           <button
             type="button"
@@ -286,9 +265,6 @@ export default function DashboardOverviewPage() {
           <h3 className="text-lg font-bold text-[#2d3e50] mb-1">
             Ready to Accelerate Outbound Outreach?
           </h3>
-          <p className="text-xs text-[#516f90] max-w-md mx-auto mb-6">
-            Capture prospects directly from LinkedIn profiles using the LeadFlow Chrome Extension, or enroll existing workspace leads into multi-step outreach sequences.
-          </p>
 
           <div className="flex items-center justify-center gap-3">
             <Link
