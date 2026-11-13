@@ -503,8 +503,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [step3Delay, setStep3Delay] = useState(7);
   const [step3Message, setStep3Message] = useState('');
   const [isSubmittingCustomSeq, setIsSubmittingCustomSeq] = useState(false);
+  // Draft connection note, only used when the connection request has not been sent yet (LinkedIn caps notes at 300 characters).
+  const [customConnNote, setCustomConnNote] = useState('');
 
   const openCustomSeqModal = () => {
+    setCustomConnNote('');
     if (lead) {
       setCustomSeqName(`Custom Sequence: ${lead.firstName} ${lead.lastName}`);
       setStep2Delay(3);
@@ -533,7 +536,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           actionType: 'connection_request',
           title: 'Connection Request',
           delayDays: 0,
-          messageTemplate: connectionNoteSent || (connectionSent ? 'Connection request sent manually on LinkedIn' : ''),
+          messageTemplate: connectionNoteSent || (connectionSent ? 'Connection request sent manually on LinkedIn' : customConnNote.trim()),
           enabled: true,
         },
         {
@@ -1516,9 +1519,20 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                       <p className="italic text-slate-800 leading-relaxed">&ldquo;{connectionNoteSent}&rdquo;</p>
                                     </div>
                                   ) : (
-                                    <div className="mt-1.5 p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-500 italic">
-                                      {connectionSent ? '(Connection request sent without note)' : '(Connection request not sent yet)'}
-                                    </div>
+                                    !connectionSent && st.messageTemplate ? (
+                                      <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
+                                        <p className="font-mono text-[10px] text-slate-500 mb-0.5">Connection note to send:</p>
+                                        <p className="whitespace-pre-wrap leading-relaxed">
+                                          {st.messageTemplate
+                                            .replace(/\{\{firstName\}\}/gi, lead.firstName)
+                                            .replace(/\{\{company\}\}/gi, lead.company)}
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="mt-1.5 p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-500 italic">
+                                        {connectionSent ? '(Connection request sent without note)' : '(Connection request not sent yet)'}
+                                      </div>
+                                    )
                                   )
                                 ) : st.messageTemplate && (
                                   <div className="mt-1.5 p-2 rounded bg-white border border-[#dfe3eb] text-[11px] text-slate-700">
@@ -1834,11 +1848,31 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                     </p>
                   </div>
                 ) : (
-                  <p className="text-[11px] text-slate-500 italic mt-1">
-                    {connectionSent
-                      ? '(Connection request sent without note)'
-                      : '(Not sent yet. Sending the request will be the first task once this sequence is approved.)'}
-                  </p>
+                  connectionSent ? (
+                    <p className="text-[11px] text-slate-500 italic mt-1">(Connection request sent without note)</p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[11px] text-slate-500 italic">
+                        Not sent yet. Sending the request will be the first task once this sequence is approved.
+                      </p>
+                      <label className="font-semibold text-[#33475b] text-[11px] block" htmlFor="custom-conn-note">
+                        Connection note to send (optional)
+                      </label>
+                      <textarea
+                        id="custom-conn-note"
+                        rows={3}
+                        maxLength={300}
+                        value={customConnNote}
+                        onChange={(e) => setCustomConnNote(e.target.value)}
+                        placeholder="e.g. Hi {{firstName}}, I work with QA teams at {{company}} and would love to connect."
+                        className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:border-[#ff7a59] focus:outline-none resize-y"
+                      />
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span>Variables: {'{{firstName}}'}, {'{{company}}'}</span>
+                        <span>{customConnNote.length}/300</span>
+                      </div>
+                    </div>
+                  )
                 )}
               </div>
 

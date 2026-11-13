@@ -304,6 +304,10 @@ export function SDRDashboardView() {
       template = item.messageTemplate;
     }
 
+    // A connection-request task with no drafted note means "send the request without a note":
+    // never substitute a later step's follow-up message for it.
+    if (item.type === 'connect' && !(template && template.trim())) return '';
+
     // If template is still empty or a wait step, find the actual message in the sequence
     if (!template || !template.trim()) {
       const realMsgStep = seq?.steps?.find(
