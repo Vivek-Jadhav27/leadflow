@@ -252,15 +252,13 @@ export default function SequencesPage() {
             seq.isCustom ||
             seq.id.startsWith('seq_custom_') ||
             Boolean(seq.targetLeadId) ||
-            /^custom (cadence|sequence)/i.test(seq.name) ||
-            /custom (cadence|sequence):/i.test(seq.name) ||
+            /^custom (cadence|sequence):/i.test(seq.name) ||
             (seq.description && seq.description.toLowerCase().includes('bespoke 1:1'))
           );
 
           const targetLead = isCustom
-            ? (seq.targetLeadId ? leads.find((l) => l.id === seq.targetLeadId) : null) ||
-              leads.find((l) => seq.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)) ||
-              leads.find((l) => seq.name.toLowerCase().includes(l.firstName.toLowerCase()) && seq.name.toLowerCase().includes(l.lastName.toLowerCase())) ||
+            ? (seq.targetLeadId ? leads.find((l) => l.id === seq.targetLeadId) : undefined) ||
+              leads.find((l) => seq.id.startsWith(`seq_custom_${l.id}`)) ||
               activeLeadsForSeq[0]
             : null;
 
@@ -486,14 +484,6 @@ export default function SequencesPage() {
                   placeholder="e.g. Series A Tech Founders LinkedIn Outbound"
                   className="w-full rounded border border-[#cbd6e2] px-3 py-1.5 text-xs text-[#33475b] focus:outline-none focus:ring-1 focus:ring-[#ff7a59]"
                 />
-              </div>
-
-              <div className="p-3 rounded bg-[#f5f8fa] border border-[#dfe3eb] flex items-center gap-2.5">
-                <Linkedin className="h-4 w-4 text-[#0077b5]" />
-                <div>
-                  <p className="font-bold text-[#33475b] text-xs">LinkedIn Connection &amp; InMail Workflow</p>
-                  <p className="text-[11px] text-slate-500">Includes connection request gate, acceptance listener, and follow-ups.</p>
-                </div>
               </div>
 
               <div className="space-y-1">

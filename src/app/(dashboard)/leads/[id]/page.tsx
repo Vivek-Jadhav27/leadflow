@@ -79,6 +79,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     return leads.find((l) => l.id === id);
   }, [leads, id]);
 
+  // Has the LinkedIn connection request actually been sent? (Drives what the custom-sequence dialog claims.)
+  const connectionSent = Boolean(
+    lead && ['request_sent', 'pending', 'request_pending', 'connected', 'verified', 'declined'].includes(lead.connectionStatus)
+  );
+
   // The activity log lives on the server; fetch this lead's entries when the page opens.
   React.useEffect(() => {
     if (id) void loadActivities(id);
@@ -528,7 +533,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           actionType: 'connection_request',
           title: 'Connection Request',
           delayDays: 0,
-          messageTemplate: connectionNoteSent || 'Connection request sent manually on LinkedIn',
+          messageTemplate: connectionNoteSent || (connectionSent ? 'Connection request sent manually on LinkedIn' : ''),
           enabled: true,
         },
         {
@@ -1512,7 +1517,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                                     </div>
                                   ) : (
                                     <div className="mt-1.5 p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-500 italic">
-                                      (Connection request sent without note)
+                                      {connectionSent ? '(Connection request sent without note)' : '(Connection request not sent yet)'}
                                     </div>
                                   )
                                 ) : st.messageTemplate && (
@@ -1779,8 +1784,12 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             <div className="rounded-md border border-[#dfe3eb] bg-[#f8fafc] p-3 text-xs space-y-1">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-[#2d3e50]">{lead.firstName} {lead.lastName}</span>
-                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  Connection: Request Sent
+                <span
+                  className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                    connectionSent ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-700 bg-amber-50 border-amber-200'
+                  }`}
+                >
+                  {connectionSent ? 'Connection: Request Sent' : 'Connection: Not sent yet'}
                 </span>
               </div>
               <p className="text-[11px] text-[#516f90]">{lead.jobTitle} at {lead.company}</p>
@@ -1804,11 +1813,15 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
               <div className="rounded-md border border-[#e2e8f0] bg-slate-50 p-3 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-[11px] text-[#33475b] flex items-center gap-1.5">
-                    <Check className="h-3.5 w-3.5 text-emerald-600" />
-                    Step 1: Connection Request (Sent on LinkedIn)
+                    {connectionSent ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Clock className="h-3.5 w-3.5 text-amber-600" />}
+                    {connectionSent ? 'Step 1: Connection Request (Sent on LinkedIn)' : 'Step 1: Connection Request (not sent yet)'}
                   </span>
-                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    Done
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      connectionSent ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-700 bg-amber-50 border-amber-200'
+                    }`}
+                  >
+                    {connectionSent ? 'Done' : 'To do'}
                   </span>
                 </div>
                 {connectionNoteSent ? (
@@ -1822,7 +1835,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   </div>
                 ) : (
                   <p className="text-[11px] text-slate-500 italic mt-1">
-                    (Connection request sent without note)
+                    {connectionSent
+                      ? '(Connection request sent without note)'
+                      : '(Not sent yet. Sending the request will be the first task once this sequence is approved.)'}
                   </p>
                 )}
               </div>

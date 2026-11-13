@@ -61,25 +61,27 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
 
   const enrolledLeads = leads.filter((l) => l.sequenceId === originalSequence?.id);
-  const targetLead =
-    enrolledLeads[0] ||
-    (originalSequence?.targetLeadId ? leads.find((l) => l.id === originalSequence.targetLeadId) : null) ||
-    leads.find(
-      (l) => originalSequence && originalSequence.name.toLowerCase().includes(`${l.firstName.toLowerCase()} ${l.lastName.toLowerCase()}`)
-    ) ||
-    leads.find(
-      (l) => originalSequence && (
-        originalSequence.name.toLowerCase().includes(l.firstName.toLowerCase()) ||
-        originalSequence.name.toLowerCase().includes(l.lastName.toLowerCase())
-      )
-    );
+  // A sequence is "bespoke" (1:1) only when it says so: the flag, the generated id, the generated
+  // "Custom Sequence: <name>" title, or the generated description. A name that merely contains the words
+  // "custom sequence" (e.g. one a user typed) is an ordinary sequence.
   const isCustomSequence = Boolean(
-    originalSequence?.isCustom ||
-    originalSequence?.id.startsWith('seq_custom_') ||
-    /custom (cadence|sequence)/i.test(originalSequence?.name || '') ||
-    originalSequence?.description?.toLowerCase().includes('bespoke') ||
-    targetLead
+    originalSequence &&
+      (originalSequence.isCustom ||
+        originalSequence.id.startsWith('seq_custom_') ||
+        Boolean(originalSequence.targetLeadId) ||
+        /^custom (cadence|sequence):/i.test(originalSequence.name) ||
+        originalSequence.description?.toLowerCase().includes('bespoke 1:1'))
   );
+
+  // The target prospect comes only from explicit links, never from guessing by name: the lead the sequence
+  // was built for, then the lead its generated id points at, then the lead enrolled in it.
+  const targetLead =
+    !originalSequence || !isCustomSequence
+      ? null
+      : (originalSequence.targetLeadId ? leads.find((l) => l.id === originalSequence.targetLeadId) : undefined) ||
+        leads.find((l) => originalSequence.id.startsWith(`seq_custom_${l.id}`)) ||
+        enrolledLeads[0] ||
+        null;
 
   const displayProspectName = targetLead
     ? `${targetLead.firstName} ${targetLead.lastName}`

@@ -22,6 +22,7 @@ import {
   planAdvance,
   planArchive,
   planAssign,
+  connectionRequestWasSent,
   stepWaitsForAcceptance,
   planConnectionAccepted,
   AWAITING_CONNECTION,
@@ -339,7 +340,8 @@ export async function submitCustomSequence(
     const leadUpdate: Doc = {
       sequenceId: seqId,
       sequenceName: name,
-      currentStepNumber: 2,
+      // Step 1 (the connection request) only counts as done if it was really sent.
+      currentStepNumber: connectionRequestWasSent(lead.connectionStatus) ? 2 : 1,
       totalSteps: steps.length,
       outreachStatus: 'pending_sequence_approval',
       nextActionTitle: 'Awaiting Admin Approval',

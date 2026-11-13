@@ -356,35 +356,46 @@ export function planReply(
  * extension) start at step 2, because the step-1 connection request was already sent on LinkedIn.
  * Returns null for leads that are not waiting.
  */
+/** True once a LinkedIn connection request has actually gone out (whether or not it was accepted). */
+export function connectionRequestWasSent(status?: string | null): boolean {
+  return ['request_sent', 'pending', 'request_pending', 'connected', 'verified', 'declined'].includes(status || '');
+}
+
 export function planActivateAfterApproval(lead: Doc, seq: Doc, pendingTasks: Doc[], ctx: PlanContext, approverName: string): Plan | null {
   if (lead.outreachStatus !== 'pending_sequence_approval' && lead.outreachStatus !== 'needs_sequence') return null;
   const steps = activeSteps(seq);
-  const step2 = steps.find((s) => s.stepNumber > 1);
-  if (!step2) return null;
+  // A lead whose connection request is already out resumes after it (step 2). One whose request has NOT been
+  // sent starts at the beginning, so sending the request is still its first task.
+  const sent = connectionRequestWasSent(lead.connectionStatus);
+  const start = sent ? steps.find((s) => s.stepNumber > 1) : steps[0];
+  if (!start) return null;
 
-  const dueDate = addDays(ctx.today, step2.delayDays ?? 3);
-  const hold = stepWaitsForAcceptance(seq, step2, lead.connectionStatus);
+  const startsWithConnect = !sent && start.actionType === 'connection_request';
+  const dueDate = startsWithConnect ? ctx.today : addDays(ctx.today, start.delayDays ?? 3);
+  const hold = stepWaitsForAcceptance(seq, start, lead.connectionStatus);
   return {
     leadUpdate: {
       sequenceId: seq.id,
       sequenceName: seq.name,
       totalSteps: steps.length,
       outreachStatus: 'in_sequence',
-      currentStepNumber: step2.stepNumber,
-      nextActionTitle: hold ? AWAITING_NEXT_ACTION : step2.title || 'Step 2: Follow-up 1',
-      nextFollowUpDate: hold ? null : lead.nextFollowUpDate || dueDate,
+      currentStepNumber: start.stepNumber,
+      nextActionTitle: hold ? AWAITING_NEXT_ACTION : start.title || 'Next step',
+      nextFollowUpDate: hold ? null : startsWithConnect ? dueDate : lead.nextFollowUpDate || dueDate,
       awaitingConnection: hold,
       updatedAt: ctx.now,
     },
     taskUpdates: cancelPending(pendingTasks, 'Cancelled: sequence approved, step scheduled.', ctx),
-    newTasks: [buildStepTask(lead, seq, step2, dueDate, ctx, hold)],
+    newTasks: [buildStepTask(lead, seq, start, dueDate, ctx, hold)],
     newActivities: [
       buildActivity(lead, {
         type: 'sequence_assigned',
         title: 'Custom Sequence Approved & Activated',
         description: hold
-          ? `Sequence "${seq.name}" was approved by ${approverName}. Step ${step2.stepNumber} starts after the connection is accepted.`
-          : `Sequence "${seq.name}" was approved by ${approverName}. Step ${step2.stepNumber} follow-up scheduled for ${dueDate}.`,
+          ? `Sequence "${seq.name}" was approved by ${approverName}. Step ${start.stepNumber} starts after the connection is accepted.`
+          : startsWithConnect
+            ? `Sequence "${seq.name}" was approved by ${approverName}. Step ${start.stepNumber} (send the connection request) is due today.`
+            : `Sequence "${seq.name}" was approved by ${approverName}. Step ${start.stepNumber} follow-up scheduled for ${dueDate}.`,
         actorName: approverName,
       }, ctx),
     ],
