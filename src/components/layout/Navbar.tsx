@@ -26,14 +26,14 @@ export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout, switchRole, isAdmin, role } = useAuthContext();
-  const { stats, tasks } = useCRM();
+  const { stats /*, tasks */ } = useCRM();
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
 
   const isOwnerOrAdmin = isAdmin || user?.role === 'admin' || role === 'admin';
-  const pendingTasksCount = tasks.filter((t) => t.status === 'pending' || t.status === 'overdue').length;
+  // const pendingTasksCount = tasks.filter((t) => t.status === 'pending' || t.status === 'overdue').length;
 
   const firstTabHref = isOwnerOrAdmin ? ROUTES.DASHBOARD : ROUTES.SDR_DASHBOARD;
 
@@ -41,7 +41,8 @@ export const Navbar: React.FC = () => {
     { label: isOwnerOrAdmin ? 'Overview' : 'Dashboard', href: firstTabHref },
     { label: 'Leads', href: ROUTES.LEADS, badge: stats.totalLeads },
     { label: 'Sequences', href: ROUTES.SEQUENCES },
-    { label: 'Tasks', href: ROUTES.TASKS, badge: pendingTasksCount > 0 ? pendingTasksCount : null },
+    // Tasks tab temporarily disabled
+    // { label: 'Tasks', href: ROUTES.TASKS, badge: pendingTasksCount > 0 ? pendingTasksCount : null },
     ...(isOwnerOrAdmin ? [{ label: 'Team', href: ROUTES.TEAM }] : []),
     {
       label: 'Journey Canvas',

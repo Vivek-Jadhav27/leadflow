@@ -148,10 +148,11 @@ class CrmStore {
     this.set({ status: this.state.loadedAt ? this.state.status : 'loading' });
 
     const run = (async () => {
-      const [leads, sequences, tasks, team, settings, activities] = await Promise.allSettled([
+      const [leads, sequences, team, settings, activities] = await Promise.allSettled([
         this.fetchAll<Lead>('/api/leads', 'leads'),
         api<{ sequences: Sequence[] }>('/api/sequences'),
-        this.fetchAll<Task>('/api/tasks', 'tasks'),
+        // Tasks tab temporarily disabled
+        // this.fetchAll<Task>('/api/tasks', 'tasks'),
         api<{ team: TeamMember[] }>('/api/team'),
         api<{ settings: WorkspaceSettings }>('/api/settings'),
         api<{ activities: ActivityEvent[] }>('/api/activities?limit=300'),
@@ -167,13 +168,13 @@ class CrmStore {
 
       take(leads, (v) => { patch.leads = v.items; truncated = truncated || v.truncated; });
       take(sequences, (v) => { patch.sequences = v.sequences || []; });
-      take(tasks, (v) => { patch.tasks = v.items; truncated = truncated || v.truncated; });
+      // take(tasks, (v) => { patch.tasks = v.items; truncated = truncated || v.truncated; });
       take(team, (v) => { patch.team = v.team || []; });
       take(settings, (v) => { patch.settings = { ...DEFAULT_SETTINGS, ...v.settings }; });
       take(activities, (v) => { patch.activities = v.activities || []; });
 
       patch.truncated = truncated;
-      patch.status = failures.length === 6 ? 'error' : 'ready';
+      patch.status = failures.length === 5 ? 'error' : 'ready';
       patch.error = failures.length ? errorMessage(failures[0], 'Failed to load some data') : null;
       this.set(patch);
     })().finally(() => {

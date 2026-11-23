@@ -158,6 +158,7 @@ export default function LeadsPage() {
   const [statusFilter, setStatusFilter] = useState<string>(initialFilter || 'all');
   const [sequenceFilter, setSequenceFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<string>(''); // YYYY-MM-DD (local)
   const [viewArchived, setViewArchived] = useState(false);
 
   // Sorting
@@ -204,6 +205,14 @@ export default function LeadsPage() {
 
         // Connection Gate filter
         if (connectionFilter !== 'all' && lead.connectionStatus !== connectionFilter) return false;
+
+        // Date added filter (matches local calendar day)
+        if (dateFilter) {
+          const d = new Date(lead.createdAt);
+          if (isNaN(d.getTime())) return false;
+          const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          if (local !== dateFilter) return false;
+        }
 
         // Sequence filter
         if (sequenceFilter !== 'all' && lead.sequenceId !== sequenceFilter) return false;
@@ -255,7 +264,7 @@ export default function LeadsPage() {
         }
         return sortOrder === 'asc' ? comp : -comp;
       });
-  }, [leads, viewArchived, connectionFilter, statusFilter, sequenceFilter, ownerFilter, searchQuery, sortBy, sortOrder]);
+  }, [leads, viewArchived, connectionFilter, statusFilter, sequenceFilter, ownerFilter, dateFilter, searchQuery, sortBy, sortOrder]);
 
   // Pagination (25 leads per page batch)
   const [currentPage, setCurrentPage] = useState(1);
@@ -264,7 +273,7 @@ export default function LeadsPage() {
   // Reset to first page when search or filters change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, connectionFilter, statusFilter, sequenceFilter, ownerFilter, viewArchived, sortBy, sortOrder]);
+  }, [searchQuery, connectionFilter, statusFilter, sequenceFilter, ownerFilter, dateFilter, viewArchived, sortBy, sortOrder]);
 
   const totalPages = Math.ceil(filteredLeads.length / pageSize) || 1;
   const clampedPage = Math.min(Math.max(1, currentPage), totalPages);
@@ -581,6 +590,28 @@ export default function LeadsPage() {
               <option value="complete_details">Complete Details</option>
               <option value="enriched">Enriched</option>
             </select>
+
+            {/* Date added filter */}
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                title="Filter by date added"
+                aria-label="Filter leads by date added"
+                className="rounded-md border border-[#cbd8eb] bg-white px-2.5 py-1.5 text-xs text-[#33475b] focus:outline-none"
+              />
+              {dateFilter && (
+                <button
+                  type="button"
+                  onClick={() => setDateFilter('')}
+                  className="text-[11px] text-[#7c98b6] hover:text-[#33475b] px-1"
+                  aria-label="Clear date filter"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
 
             {/* Sequence filter */}
             <select

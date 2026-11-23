@@ -8,7 +8,7 @@ import {
   LayoutDashboard,
   Layers,
   GitBranch,
-  CheckSquare,
+  // CheckSquare, // used by the disabled Tasks tab
   Users2,
   CheckCircle2,
   X,
@@ -54,12 +54,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
     },
     ...(isOwnerOrAdmin
       ? [
-          {
-            label: 'Tasks',
-            href: ROUTES.TASKS,
-            icon: CheckSquare,
-            isActive: pathname === ROUTES.TASKS || pathname.startsWith('/tasks/'),
-          },
+          // Tasks tab temporarily disabled
+          // {
+          //   label: 'Tasks',
+          //   href: ROUTES.TASKS,
+          //   icon: CheckSquare,
+          //   isActive: pathname === ROUTES.TASKS || pathname.startsWith('/tasks/'),
+          // },
           {
             label: 'Team Members',
             href: ROUTES.WORKSPACE_TEAM,
