@@ -113,7 +113,7 @@ export default function SequencesPage() {
         actionType: 'connection_request',
         title: 'Send LinkedIn Connection Request',
         delayDays: 0,
-        messageTemplate: 'Hi {{firstName}}, noticed your work at {{company}}. Would love to connect and follow your journey.',
+        messageTemplate: '',
         enabled: true,
       },
       {
@@ -130,7 +130,7 @@ export default function SequencesPage() {
         actionType: 'send_message',
         title: 'Send Initial Value Proposition Message',
         delayDays: 1,
-        messageTemplate: 'Thanks for connecting, {{firstName}}! How is {{company}} optimizing sales pipeline this quarter?',
+        messageTemplate: '',
         enabled: true,
       },
       {
@@ -139,7 +139,7 @@ export default function SequencesPage() {
         actionType: 'followup',
         title: 'Follow-up Case Study Nudge',
         delayDays: 3,
-        messageTemplate: 'Quick follow-up {{firstName}}—open to a brief 5-min walkthrough of our pipeline results next week?',
+        messageTemplate: '',
         enabled: true,
       },
       {
