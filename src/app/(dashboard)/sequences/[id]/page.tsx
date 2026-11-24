@@ -35,6 +35,35 @@ import { Sequence, SequenceStep } from '@/types/crm';
 import { WorkflowCanvas } from '@/components/workflow/WorkflowCanvas';
 import { toast } from 'sonner';
 
+interface SequenceDraft {
+  name: string;
+  description: string;
+  targetRole: 'all' | 'sdr' | 'ae';
+  steps: SequenceStep[];
+}
+
+function readDraft(key: string): SequenceDraft | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return d && Array.isArray(d.steps) ? (d as SequenceDraft) : null;
+  } catch {
+    return null;
+  }
+}
+function writeDraft(key: string, draft: SequenceDraft) {
+  try { localStorage.setItem(key, JSON.stringify(draft)); } catch { /* storage unavailable */ }
+}
+function clearDraft(key: string) {
+  try { localStorage.removeItem(key); } catch { /* storage unavailable */ }
+}
+
+// Steps that wait or complete carry no message; every other step must have one.
+const stepNeedsMessage = (st: SequenceStep) =>
+  st.actionType !== 'wait_for_acceptance' && st.actionType !== 'complete_details';
+const isStepMessageMissing = (st: SequenceStep) => stepNeedsMessage(st) && !st.messageTemplate?.trim();
+
 export default function SequenceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const { id } = resolvedParams;
@@ -98,6 +127,9 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   const [seqDesc, setSeqDesc] = useState(originalSequence?.description || '');
   const [seqTargetRole, setSeqTargetRole] = useState<'all' | 'sdr' | 'ae'>(originalSequence?.targetRole || 'all');
   const [steps, setSteps] = useState<SequenceStep[]>(originalSequence?.steps || []);
+  const [showErrors, setShowErrors] = useState(false);
+  const draftKey = `leadflow:sequence-draft:${id}`;
+  const baselineRef = React.useRef<string | null>(null);
 
   // Sync if sequence loaded
   React.useEffect(() => {
@@ -126,9 +158,39 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
           }
         }
       }
-      setSteps(loadedSteps);
+      const baseline = {
+        name: originalSequence.name,
+        description: originalSequence.description,
+        targetRole: originalSequence.targetRole || (isCustomSequence ? 'sdr' : 'all'),
+        steps: loadedSteps,
+      };
+      baselineRef.current = JSON.stringify(baseline);
+
+      // Unsaved edits survive tab switches, reloads and refetches until "Save Sequence" is clicked.
+      const draft = readDraft(draftKey);
+      if (draft) {
+        setSeqName(draft.name);
+        setSeqDesc(draft.description);
+        setSeqTargetRole(draft.targetRole);
+        setSteps(draft.steps);
+      } else {
+        setSteps(loadedSteps);
+      }
     }
-  }, [originalSequence, targetLead, isCustomSequence]);
+  }, [originalSequence, targetLead, isCustomSequence, draftKey]);
+
+  // Persist edits locally while they differ from the saved sequence.
+  React.useEffect(() => {
+    if (!originalSequence || baselineRef.current === null) return;
+    const current: SequenceDraft = {
+      name: seqName,
+      description: seqDesc,
+      targetRole: seqTargetRole,
+      steps,
+    };
+    if (JSON.stringify(current) === baselineRef.current) clearDraft(draftKey);
+    else writeDraft(draftKey, current);
+  }, [seqName, seqDesc, seqTargetRole, steps, originalSequence, draftKey]);
 
   const isCreator =
     (user?.uid && originalSequence?.createdByUid === user.uid) ||
@@ -207,7 +269,7 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
       actionType: 'followup',
       title: `Follow-up ${nextNum}`,
       delayDays: 3,
-      messageTemplate: 'Hi {{firstName}}, checking in on my previous LinkedIn message. Would love to share some insights on {{company}}.',
+      messageTemplate: '',
       enabled: true,
     };
     setSteps([...steps, newStep]);
@@ -221,13 +283,21 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
   };
 
   // Save changes
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!seqName.trim()) {
       toast.error('Sequence name cannot be empty.');
       return;
     }
     if (steps.length === 0) {
       toast.error('A sequence must have at least one valid step.');
+      return;
+    }
+
+    const missing = steps.findIndex(isStepMessageMissing);
+    if (missing !== -1) {
+      setShowErrors(true);
+      setActiveTab('builder');
+      toast.error(`Step ${missing + 1} needs a message before you can save.`);
       return;
     }
 
@@ -239,7 +309,11 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
       steps,
     };
 
-    void saveSequence(updated);
+    const saved = await saveSequence(updated);
+    if (saved) {
+      setShowErrors(false);
+      clearDraft(draftKey);
+    }
   };
 
   return (
@@ -530,8 +604,15 @@ export default function SequenceDetailPage({ params }: { params: Promise<{ id: s
                             rows={3}
                             value={st.messageTemplate || ''}
                             onChange={(e) => updateStep(index, { messageTemplate: e.target.value })}
-                            className="w-full rounded border border-[#cbd6e2] p-2 text-xs bg-white text-[#33475b] focus:outline-none focus:ring-1 focus:ring-[#ff7a59] resize-none"
+                            placeholder="Write your message..."
+                            aria-invalid={showErrors && isStepMessageMissing(st)}
+                            className={`w-full rounded border p-2 text-xs bg-white text-[#33475b] focus:outline-none focus:ring-1 focus:ring-[#ff7a59] resize-none ${
+                              showErrors && isStepMessageMissing(st) ? 'border-rose-500' : 'border-[#cbd6e2]'
+                            }`}
                           />
+                          {showErrors && isStepMessageMissing(st) && (
+                            <p className="text-[11px] text-rose-600">Message is required.</p>
+                          )}
                         </div>
                       )}
                     </div>
